@@ -1,0 +1,21 @@
+# Dependencies for the act subgraph (backend/app/graph/act/). Mirrors the
+# per-component requirements.txt convention used by
+# backend/app/graph/reason/sql_agent/ and backend/app/llm/ -- fold into a
+# single backend/requirements.txt or pyproject.toml once that lands.
+
+langgraph>=0.2
+langchain-core>=0.3
+sqlalchemy>=2.0
+psycopg[binary]>=3.1
+redis>=5.0
+
+# Only needed for standalone verification / if no other module already
+# constructs a ChatOpenAI-compatible model for you -- app.llm.provider
+# (backend/app/llm/provider.py) is expected to own this in the full system.
+langchain-openai>=0.2
+
+# For a real deployment: interrupt()/Command(resume=...) need a durable
+# checkpointer (plan §4 specifies PostgresSaver, wired by the
+# supervisor-assembly agent). Not required to run this subgraph's own
+# standalone tests -- langgraph.checkpoint.memory.MemorySaver covers that.
+langgraph-checkpoint-postgres>=2.0

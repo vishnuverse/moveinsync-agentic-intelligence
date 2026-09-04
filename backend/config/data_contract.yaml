@@ -174,3 +174,39 @@ entities:
       phone: phone
       status: status
       created_at: created_at
+
+  # act-layer outputs (backend/app/graph/act/) -- the UI notification inbox
+  # and report library both read through these two entities. Added by the
+  # act subgraph build; kept in lockstep with backend/db/schema.sql.
+  notification:
+    table: agent_notifications
+    columns:
+      id: id
+      org_id: org_id
+      persona: persona
+      scope: scope
+      severity: severity
+      title: title
+      message: message
+      related_entity_type: related_entity_type
+      related_entity_id: related_entity_id
+      status: status
+      thread_id: thread_id
+      created_at: created_at
+      updated_at: updated_at
+
+  report:
+    table: agent_reports
+    columns:
+      id: id
+      org_id: org_id
+      report_type: report_type
+      persona: persona
+      title: title
+      period_start: period_start
+      period_end: period_end
+      storage_ref: storage_ref
+      format: format
+      thread_id: thread_id
+      generated_at: generated_at
+      created_at: created_at

@@ -37,6 +37,11 @@ yarn-debug.log*
 .pytest_cache/
 coverage/
 
+# Generated act-subgraph output (backend/app/graph/act/html_report_agent/) --
+# regenerated on every run, referenced from agent_reports.storage_ref, not
+# meant to be committed.
+backend/data/reports/*.html
+
 # OS
 .DS_Store
 Thumbs.db
