@@ -31,6 +31,8 @@ _DETECTOR_NAMES = (
     "detect_cost_anomaly",
     "detect_emissions_signal",
     "detect_attendance_correlation",
+    "detect_escort_compliance_signal",
+    "detect_billing_discrepancy_signal",
     "flag_data_quality",
 )
 

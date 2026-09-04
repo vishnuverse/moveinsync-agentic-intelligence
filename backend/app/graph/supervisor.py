@@ -79,6 +79,8 @@ logger = logging.getLogger(__name__)
 #       both personas rather than picking one.
 #   LM1 (team commute-attendance correlation)               -> line_manager
 #   TH2 (carbon footprint vs. sustainability goal)           -> transport_head
+#   PRD v3 F1 (escort compliance / active panic alert)       -> transport_manager
+#   PRD v3 F2 (billing slab/distance discrepancy)            -> transport_head
 #   data_quality_issue is logged (backend/db's data_quality_flags, written by
 #       the sense layer itself) but is not persona-actionable on its own --
 #       no reason/act dispatch for it here.
@@ -90,6 +92,8 @@ _PERSONA_ROUTES: dict[str, tuple[str, ...]] = {
     "emissions_over_target": ("transport_head",),
     "attendance_correlated_with_transport": ("line_manager",),
     "attendance_unrelated_late": ("line_manager",),
+    "escort_compliance_violation": ("transport_manager",),
+    "billing_discrepancy": ("transport_head",),
     "data_quality_issue": (),
 }
 

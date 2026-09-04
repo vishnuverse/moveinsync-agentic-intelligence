@@ -46,6 +46,16 @@ entities:
       passenger_count: passenger_count
       status: status
       created_at: created_at
+      # Additive (PRD v3 F1/F2). trip_direction/traveled_km are real physical
+      # columns on mis.trip that were simply never mapped before. actual_escort
+      # is real in the raw ride_data_trip CSVs and stg.ride_trip, but
+      # mis_schema.sql/transform.sql (off-limits -- see backend/db/migrations/
+      # 001_add_escort_and_ack_time.sql) never carried it into mis.trip, so
+      # it only exists on mis.trip after that migration has been applied
+      # post-ingest.
+      trip_direction: trip_direction
+      traveled_km: traveled_km
+      actual_escort: actual_escort
 
   cost:
     table: mis.cost
@@ -62,6 +72,9 @@ entities:
       cost_per_km: cost_per_km_inr
       category: cost_category
       created_at: created_at
+      # Additive (PRD v3 F2 billing-slab auditor): real physical column
+      # already on mis.cost (bill_data.slab_name), just never mapped before.
+      slab_name: slab_name
 
   incident:
     table: mis.incident
@@ -78,6 +91,13 @@ entities:
       reported_at: reported_at
       status: status
       created_at: created_at
+      # Additive (PRD v3 F1 "Critical Response Time" formula). acknowledge_time
+      # is real in alerts_data/stg.alerts_data but transform.sql (off-limits)
+      # never carried it into mis.incident (reported_at is a same-as-occurred_at
+      # placeholder, not a real ack timestamp) -- only present on mis.incident
+      # after backend/db/migrations/001_add_escort_and_ack_time.sql is applied
+      # post-ingest.
+      acknowledge_time: acknowledge_time
 
   emission:
     table: mis.emission
@@ -150,6 +170,10 @@ entities:
       work_location: work_location
       status: status
       created_at: created_at
+      # Additive (PRD v3 F1 escort-compliance auditor): real physical column
+      # already on mis.employee (modal emp_data.gender per stwid), just never
+      # mapped before.
+      gender: gender
 
   route:
     table: mis.route

@@ -46,7 +46,12 @@ from .state import TopState
 # Kept here (not in supervisor.py) to avoid a supervisor<->graph import cycle:
 # supervisor.py imports build_top_graph from this module, so this module
 # cannot import back from supervisor.py.
-_COMMUNICATION_SIGNAL_TYPES = {"incident"}
+#
+# escort_compliance_violation (PRD v3 F1) joins this set too: the PRD is
+# explicit that the actor "drafts an urgent warning notice to the vendor's
+# dispatch desk" and pauses on interrupt() before sending -- exactly the TM5
+# pattern, reused unmodified rather than adding a second HITL mechanism.
+_COMMUNICATION_SIGNAL_TYPES = {"incident", "escort_compliance_violation"}
 _SEVERITY_MAP = {"critical": "critical", "high": "warning", "medium": "warning", "low": "info"}
 
 
@@ -82,7 +87,13 @@ def bridge_to_act(state: TopState) -> dict[str, Any]:
         if mapped_severity:
             updates["severity"] = mapped_severity
     if action_type == "communication":
-        updates["audience"] = "vendor" if signal and signal.get("entity_type") in ("incident", "route") else "leadership"
+        # "trip" added for escort_compliance_violation's unescorted-trip
+        # sub-case (entity_type="trip", see sense/nodes.py) -- PRD v3 F1
+        # routes that case to the vendor's dispatch desk exactly like its
+        # incident-type (active panic alert) sub-case already does.
+        updates["audience"] = (
+            "vendor" if signal and signal.get("entity_type") in ("incident", "route", "trip") else "leadership"
+        )
 
     return updates
 

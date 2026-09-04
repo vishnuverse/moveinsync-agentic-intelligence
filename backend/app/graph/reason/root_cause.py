@@ -42,7 +42,18 @@ DEFAULT_ROOT_CAUSE_MAX_TOKENS = 1024
 # enforcing the plan's explicit "safety-critical or customer/leadership-
 # facing" rule (task item 3) even if a non-frontier model's own judgement
 # call is inconsistent.
-_FORCE_SIGNOFF_SIGNAL_TYPES = {"incident"}
+#
+# escort_compliance_violation (PRD v3 F1) is added here as the one narrow,
+# flagged exception this task's constraints allow touching in this file: its
+# active-panic-alert sub-case is already severity="critical" (covered by the
+# floor below on its own), but its unescorted-late-night-trip sub-case is
+# severity="high" per the PRD/task spec (sense/nodes.py deliberately does
+# NOT inflate that to "critical" -- an unescorted trip and an active SOS
+# press are not the same urgency). PRD F1 calls the whole feature safety-
+# critical and requires human verification before the vendor dispatch notice
+# goes out either way, so the signal_type itself -- not just "critical"
+# severity -- needs to force sign-off for both sub-cases to reliably pause.
+_FORCE_SIGNOFF_SIGNAL_TYPES = {"incident", "escort_compliance_violation"}
 _FORCE_SIGNOFF_SEVERITIES = {"critical"}
 
 
