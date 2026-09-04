@@ -1,0 +1,17 @@
+:4173 {
+	# Same origin serves the static app and proxies /api -- required so a
+	# single Cloudflare Quick Tunnel URL (one target, no path-based ingress
+	# config available without a named tunnel + dashboard setup) reaches both.
+	# VITE_API_BASE_URL is built as the relative path "/api" for exactly this
+	# reason (see frontend/Dockerfile) -- it resolves against whatever origin
+	# actually served the page, local or tunneled, with no rebuild needed.
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

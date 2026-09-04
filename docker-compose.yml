@@ -1,16 +1,18 @@
 # MoveInSync Agentic Intelligence -- local/demo stack (plan §9).
 #
-# `cloudflared` (the public Quick Tunnel) is intentionally NOT included here
-# yet -- per the plan's own build order (§12 step 14: "added last, once
-# frontend is stable locally") and this integration pass's scope, which is
-# the `backend` service and everything it depends on. Add it as a follow-up
-# once this stack is confirmed stable.
-#
 # Run:
 #   docker compose up --build
 # The `seed` job applies backend/db/{schema,triggers,api_schema}.sql and
 # generates synthetic data on first boot, then exits -- `backend`/`scheduler`
 # wait for it via `depends_on: condition: service_completed_successfully`.
+#
+# Public demo URL (Cloudflare Quick Tunnel, no account/domain needed): once
+# the stack is up, run:
+#   docker compose logs cloudflared | grep trycloudflare.com
+# and grab the printed https://<random>.trycloudflare.com URL. It changes on
+# every restart. The tunnel points only at `frontend`, which reverse-proxies
+# /api (and the /api/ws websocket) to `backend` itself (see frontend/Caddyfile)
+# -- one tunnel target reaches the whole app, no second hostname needed.
 
 services:
   postgres:
@@ -70,10 +72,13 @@ services:
       DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
       REDIS_URL: redis://redis:6379/0
       # PUBLIC_API_BASE_URL is what report preview_url links point browsers
-      # at directly -- localhost:8000 (the host-published port below), not
-      # the in-network "backend" hostname, since the browser opening a report
-      # link runs on the host, not inside the compose network.
-      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000/api}
+      # at. Relative ("/api"), not an absolute localhost/hostname URL: the
+      # browser resolves a relative href against whatever origin actually
+      # served the page it's on -- localhost:5173 locally, or the Cloudflare
+      # Quick Tunnel's *.trycloudflare.com URL when tunneled -- with no env
+      # change needed to go from one to the other (frontend/Caddyfile proxies
+      # /api to `backend` on that same origin either way).
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-/api}
     ports:
       - "8000:8000"
     volumes:
@@ -109,12 +114,32 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000/api}
+        # Relative on purpose -- see frontend/Dockerfile's own comment and
+        # the PUBLIC_API_BASE_URL comment above. Do NOT point this at
+        # PUBLIC_API_BASE_URL/localhost:8000; frontend/Caddyfile is what
+        # makes a relative "/api" resolve correctly on this container itself.
+        VITE_API_BASE_URL: "/api"
         VITE_USE_MOCK: "false"
     depends_on:
       - backend
     ports:
       - "5173:4173"
+
+  # Cloudflare Quick Tunnel -- no account, no domain, no token (see the file
+  # header comment for how to get the public URL once this is up). Outbound-
+  # only: no ports published, nothing to open in a firewall. Points only at
+  # `frontend`, which proxies /api itself -- see frontend/Caddyfile.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    # --protocol http2, not the default QUIC/UDP: verified live that QUIC
+    # repeatedly fails ("context canceled" / "control stream encountered a
+    # failure") from inside this container's Docker network -- a known
+    # cloudflared-in-Docker rough edge (UDP/QUIC is more sensitive to
+    # container networking than plain HTTP/2 over TCP).
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://frontend:4173"]
+    depends_on:
+      - frontend
+    restart: unless-stopped
 
 volumes:
   moveinsync_pg_data:

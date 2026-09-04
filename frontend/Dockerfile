@@ -9,15 +9,22 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
 COPY frontend/ ./
 
-ARG VITE_API_BASE_URL=http://localhost:8000/api
+# Relative, not an absolute localhost/hostname URL: the runtime stage below
+# proxies /api on the SAME origin that serves the page (see Caddyfile), so
+# this resolves correctly whether that origin is localhost:5173 or a
+# Cloudflare Quick Tunnel URL -- no rebuild needed to go from local to public.
+ARG VITE_API_BASE_URL=/api
 ARG VITE_USE_MOCK=false
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_USE_MOCK=${VITE_USE_MOCK}
 RUN npm run build
 
-FROM node:20-slim
-WORKDIR /app
-RUN npm install -g serve@14
-COPY --from=build /app/dist ./dist
+# Caddy, not a plain static server (`serve`): a Cloudflare Quick Tunnel only
+# takes one --url target, so the single container the tunnel points at must
+# both serve the built app AND reverse-proxy /api (incl. the /api/ws
+# WebSocket, which Caddy's reverse_proxy upgrades automatically) to the
+# backend service -- see frontend/Caddyfile.
+FROM caddy:2-alpine
+COPY --from=build /app/dist /srv
+COPY frontend/Caddyfile /etc/caddy/Caddyfile
 EXPOSE 4173
-CMD ["serve", "-s", "dist", "-l", "4173"]
