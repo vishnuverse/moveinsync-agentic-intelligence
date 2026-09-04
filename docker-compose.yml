@@ -1,0 +1,121 @@
+# MoveInSync Agentic Intelligence -- local/demo stack (plan §9).
+#
+# `cloudflared` (the public Quick Tunnel) is intentionally NOT included here
+# yet -- per the plan's own build order (§12 step 14: "added last, once
+# frontend is stable locally") and this integration pass's scope, which is
+# the `backend` service and everything it depends on. Add it as a follow-up
+# once this stack is confirmed stable.
+#
+# Run:
+#   docker compose up --build
+# The `seed` job applies backend/db/{schema,triggers,api_schema}.sql and
+# generates synthetic data on first boot, then exits -- `backend`/`scheduler`
+# wait for it via `depends_on: condition: service_completed_successfully`.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: moveinsync
+      POSTGRES_PASSWORD: moveinsync
+      POSTGRES_DB: moveinsync
+    ports:
+      - "5432:5432"
+    volumes:
+      - moveinsync_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moveinsync -d moveinsync"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  seed:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
+    entrypoint: ["sh", "db/seed/entrypoint.sh"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-sarvam}
+      LLM_MODEL: ${LLM_MODEL:-sarvam-105b-conversations}
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LLM_DAILY_CALL_LIMIT: ${LLM_DAILY_CALL_LIMIT:-500}
+      DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
+      REDIS_URL: redis://redis:6379/0
+      # PUBLIC_API_BASE_URL is what report preview_url links point browsers
+      # at directly -- localhost:8000 (the host-published port below), not
+      # the in-network "backend" hostname, since the browser opening a report
+      # link runs on the host, not inside the compose network.
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000/api}
+    ports:
+      - "8000:8000"
+    volumes:
+      - moveinsync_reports:/app/data/reports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-sarvam}
+      LLM_MODEL: ${LLM_MODEL:-sarvam-105b-conversations}
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LLM_DAILY_CALL_LIMIT: ${LLM_DAILY_CALL_LIMIT:-500}
+      DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
+      REDIS_URL: redis://redis:6379/0
+      PIPELINE_INTERVAL_MINUTES: ${PIPELINE_INTERVAL_MINUTES:-5}
+    volumes:
+      - moveinsync_reports:/app/data/reports
+    command: ["python", "-m", "app.schedulers.main"]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000/api}
+        VITE_USE_MOCK: "false"
+    depends_on:
+      - backend
+    ports:
+      - "5173:4173"
+
+volumes:
+  moveinsync_pg_data:
+  moveinsync_reports:
