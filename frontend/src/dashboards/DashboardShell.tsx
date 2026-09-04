@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import type { MetricCardData, PersonaId } from "../api";
 import { MetricCard } from "../components/MetricCard";
@@ -9,9 +9,13 @@ interface DashboardShellProps {
   persona: PersonaId;
   heading: string;
   description: string;
+  /** Persona-specific Highcharts panels (frontend/src/charts/), rendered
+   * below the metric cards -- charts add trend/breakdown visualization, they
+   * don't replace the at-a-glance KPI cards above them. */
+  charts?: ReactNode;
 }
 
-export function DashboardShell({ persona, heading, description }: DashboardShellProps) {
+export function DashboardShell({ persona, heading, description, charts }: DashboardShellProps) {
   const [metrics, setMetrics] = useState<MetricCardData[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -37,6 +41,7 @@ export function DashboardShell({ persona, heading, description }: DashboardShell
           ))}
         </div>
       )}
+      {charts}
       <ReportsSection persona={persona} />
     </div>
   );

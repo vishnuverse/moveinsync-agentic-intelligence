@@ -46,6 +46,12 @@ entities:
       passenger_count: passenger_count
       status: status
       created_at: created_at
+      # Additive for chart aggregation queries (backend/app/services/chart_data.py)
+      # -- not read by any sense/reason/act node, so adding them here doesn't
+      # touch that code path at all.
+      delay_reason: delay_reason
+      delay_minutes: delay_minutes
+      traveled_km: traveled_km
 
   cost:
     table: mis.cost
@@ -93,6 +99,10 @@ entities:
       co2_per_passenger_km: co2_per_passenger_km
       vehicle_type: vehicle_type
       created_at: created_at
+      # Additive for the transport-head emissions-by-fuel-type chart (Diesel
+      # /Petrol/Electric, PRD Feature 5) -- vehicle_type above only carries
+      # the coarser EV/ICE split.
+      fuel_type: fuel_type
 
   commute:
     table: mis.commute
@@ -108,6 +118,9 @@ entities:
       mode: mode
       status: status
       created_at: created_at
+      # Additive for the line-manager absence-split chart (backend/app/services/chart_data.py).
+      is_no_show: is_no_show
+      not_boarding_reason: not_boarding_reason
 
   attendance:
     table: mis.attendance

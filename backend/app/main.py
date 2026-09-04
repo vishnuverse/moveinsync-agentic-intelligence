@@ -13,7 +13,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import activity, chat, dashboard, notifications, reports, roles, trace, ws
+from app.api import activity, charts, chat, dashboard, notifications, reports, roles, trace, ws
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -34,6 +34,7 @@ app.add_middleware(
 
 app.include_router(roles.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(charts.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(trace.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")

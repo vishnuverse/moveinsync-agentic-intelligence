@@ -1,12 +1,15 @@
 import type {
   ActivityEntry,
+  ChartSeriesData,
   ChatMessage,
   MetricCardData,
   NotificationItem,
   PersonaId,
+  PieChartData,
   ReportMeta,
   Role,
   TraceStep,
+  VendorScorecardData,
 } from "./types";
 
 export const ROLES: Role[] = [
@@ -645,3 +648,128 @@ const RAW_ACTIVITY_LOG: ActivityEntry[] = [
 export const ACTIVITY_LOG: ActivityEntry[] = [...RAW_ACTIVITY_LOG].sort(
   (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
 );
+
+// ---------------------------------------------------------------------------
+// Chart mock data (frontend/src/charts/) -- shaped exactly like the real
+// /api/charts/* responses (backend/app/services/chart_data.py) so the demo
+// looks identical whether VITE_USE_MOCK is on or off. A small seeded PRNG
+// keeps the series stable across renders instead of jittering on every fetch.
+// ---------------------------------------------------------------------------
+
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+}
+
+function isoDaysBack(daysBack: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysBack);
+  return d.toISOString().slice(0, 10);
+}
+
+export function otaTrendMock(): ChartSeriesData {
+  const rand = seededRandom(7);
+  const days = 45;
+  const categories: string[] = [];
+  const data: number[] = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    categories.push(isoDaysBack(i));
+    const dip = i < 5 ? -3 : 0; // recent dip, matches the "Route 14" narrative elsewhere in the mock data
+    data.push(Math.round((92 + rand() * 5 - 2 + dip) * 10) / 10);
+  }
+  return { categories, series: [{ name: "On-Time Arrival %", data }] };
+}
+
+export function delayReasonsMock(): ChartSeriesData {
+  return {
+    categories: ["NODELAY", "TRAFFIC", "DRIVER", "EMPLOYEE", "WEATHER", "VEHICLE_BREAKDOWN"],
+    series: [{ name: "Trips", data: [48210, 9840, 6120, 3040, 1180, 640] }],
+  };
+}
+
+export function noShowTrendMock(): ChartSeriesData {
+  const rand = seededRandom(13);
+  const days = 45;
+  const categories: string[] = [];
+  const data: number[] = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    categories.push(isoDaysBack(i));
+    data.push(Math.round((5.5 + rand() * 4 - 2) * 10) / 10);
+  }
+  return { categories, series: [{ name: "No-Show Rate %", data }] };
+}
+
+export function absenceSplitMock(): PieChartData {
+  return {
+    series: [
+      {
+        name: "No-Shows",
+        data: [
+          { name: "Delay-Caused", y: 612 },
+          { name: "Employee-Caused", y: 388 },
+        ],
+      },
+    ],
+  };
+}
+
+export function billingDiscrepancyMock(): ChartSeriesData {
+  return {
+    categories: ["Apr 2026", "May 2026", "Jun 2026", "Jul 2026", "Aug 2026", "Sep 2026"],
+    series: [
+      { name: "Billing Discrepancy (₹)", data: [412000, 388500, 465200, 501800, 447300, 398600] },
+    ],
+  };
+}
+
+export function emissionsByFuelMock(): ChartSeriesData {
+  const rand = seededRandom(21);
+  const weeks = 12;
+  const categories: string[] = [];
+  const diesel: number[] = [];
+  const petrol: number[] = [];
+  const electric: number[] = [];
+  for (let i = weeks - 1; i >= 0; i -= 1) {
+    categories.push(isoDaysBack(i * 7));
+    diesel.push(Math.round((38 + rand() * 6) * 10) / 10);
+    petrol.push(Math.round((14 + rand() * 4) * 10) / 10);
+    electric.push(0);
+  }
+  return {
+    categories,
+    series: [
+      { name: "Diesel", data: diesel },
+      { name: "Petrol", data: petrol },
+      { name: "Electric", data: electric },
+    ],
+  };
+}
+
+export function vendorScorecardMock(): VendorScorecardData {
+  const rand = seededRandom(29);
+  const vendors = [
+    "Metro Cabs",
+    "QuickRide",
+    "CityLink Fleet",
+    "Swift Commute",
+    "Urban Wheels",
+    "GreenMile Transit",
+    "Prime Shuttle",
+    "Reliable Rides",
+  ];
+  return {
+    vendors: vendors.map((vendor, idx) => {
+      const sparkline = Array.from({ length: 10 }, () => Math.round((90 + rand() * 8 - 4) * 10) / 10);
+      return {
+        vendor,
+        sla_pct: idx === 0 ? 88.4 : Math.round((90 + rand() * 8) * 10) / 10,
+        cost_per_km: Math.round((13.5 + rand() * 4) * 100) / 100,
+        incident_count: idx === 0 ? 4 : Math.floor(rand() * 3),
+        sla_trend: sparkline,
+      };
+    }),
+  };
+}
