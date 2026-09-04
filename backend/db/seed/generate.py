@@ -132,8 +132,19 @@ class Seeder:
         self.dq_flag_count += 1
 
     def reset_tables(self) -> None:
+        # BUGFIX (found live: a routine `docker compose up -d --build backend`
+        # -- rebuilding the backend image, which shares a Dockerfile/context
+        # with `seed`, invalidates seed's build cache and makes Compose
+        # recreate+rerun it -- silently wiped out ~30 minutes of real
+        # autonomous-pipeline work and real Sarvam spend). `agent_reports`/
+        # `agent_notifications` are RUNTIME OUTPUT the agent system writes
+        # (act/db.py's upsert_notification/upsert_report), not seed/input
+        # data -- they must never be in a "reset the seed data" TRUNCATE
+        # list, synthetic or real-data mode alike. `sql_agent_examples` and
+        # `data_quality_flags` stay here: both are genuinely seed-owned
+        # (curated examples, and this generator's own detected-issue log).
         tables = [
-            "sql_agent_examples", "agent_reports", "agent_notifications", "data_quality_flags",
+            "sql_agent_examples", "data_quality_flags",
             "attendance_records", "commute_logs", "sustainability_targets", "emissions_log",
             "vendor_invoices", "route_costs", "safety_incidents", "route_trips",
             "drivers", "routes", "vendors", "employees", "teams",
