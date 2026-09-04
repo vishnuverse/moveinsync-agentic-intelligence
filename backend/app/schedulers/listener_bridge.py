@@ -18,6 +18,7 @@ import logging
 
 from app.graph.sense.listener import SenseEventListener
 from app.graph.supervisor import run_pipeline
+from app.services.activity_log import record_pipeline_summary
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,10 @@ async def run_listener_bridge(listener: SenseEventListener, org_id: str) -> None
     async for event in listener.stream():
         logger.info("event-triggered pipeline run: org=%s event=%s", org_id, event)
         try:
-            await loop.run_in_executor(None, run_pipeline, org_id, None, event)
+            summary = await loop.run_in_executor(None, run_pipeline, org_id, None, event)
+            try:
+                record_pipeline_summary(org_id, summary, triggered_by="event")
+            except Exception:  # noqa: BLE001 - activity-log persistence must never break the listener loop
+                logger.exception("event-triggered run: failed to record activity log for event %s", event)
         except Exception:  # noqa: BLE001 - one bad event must not kill the listener loop
             logger.exception("event-triggered run_pipeline failed for event %s", event)

@@ -227,3 +227,17 @@ entities:
       period: period
       notes: notes
       created_at: created_at
+
+  # GET /api/activity's backing store (backend/db/api_schema.sql, plan §10/§11).
+  # Additive only -- written by app/services/activity_log.py, called from the
+  # scheduler's interval/event paths.
+  pipeline_run:
+    table: pipeline_runs
+    columns:
+      id: id
+      org_id: org_id
+      persona: persona
+      action: action
+      thread_id: thread_id
+      triggered_by: triggered_by
+      created_at: created_at

@@ -22,6 +22,7 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.graph.supervisor import run_pipeline
+from app.services.activity_log import record_pipeline_summary
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ def _tick(org_id: str) -> None:
         logger.info(
             "scheduler tick: org=%s dispatches=%d paused_for_signoff=%d", org_id, len(summary), paused
         )
+        try:
+            record_pipeline_summary(org_id, summary, triggered_by="schedule")
+        except Exception:  # noqa: BLE001 - activity-log persistence must never break the tick itself
+            logger.exception("scheduler tick: failed to record activity log for org %s", org_id)
     except Exception:  # noqa: BLE001 - one bad tick must not kill the recurring job
         logger.exception("scheduler tick failed for org %s", org_id)
 

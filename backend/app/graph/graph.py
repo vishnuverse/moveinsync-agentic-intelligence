@@ -27,12 +27,14 @@ back out of this graph's own checkpointer.
 from __future__ import annotations
 
 import functools
+from datetime import datetime
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.act import build_act_subgraph
+from app.graph.sense.state import Signal
 from app.graph.act.state import ActionType
 from app.graph.reason import run_reason
 
@@ -85,18 +87,63 @@ def bridge_to_act(state: TopState) -> dict[str, Any]:
     return updates
 
 
+def _signal_from_dict(raw: dict[str, Any] | None) -> Signal | None:
+    """BUGFIX (found live while wiring the API layer's dashboard/trace
+    endpoints against a real run_pipeline() call -- the first time the sense
+    -> reason path actually ran end-to-end together with a real signal):
+    TopState.signal is a plain dict (app.graph.supervisor builds it via
+    `signal.to_dict()`, and bridge_to_act below already reads it with
+    `.get(...)`), but app.graph.reason's entire internal contract
+    (ReasonState.signal, router.decide_route, impact_context's
+    infer_metric_from_signal, root_cause's synthesize_root_cause) expects a
+    `Signal` dataclass with attribute access -- calling run_reason(signal=
+    state.get("signal")) as a bare dict raised
+    `AttributeError: 'dict' object has no attribute 'signal_type'` on every
+    single signal-driven pipeline run. This is the one place that dict needs
+    to become a real Signal again before crossing into reason/ -- graph.py is
+    exactly the bridging module responsible for state-shape adaptation
+    between subgraphs (see bridge_to_act just below, which does the reverse
+    direction), so the fix belongs here rather than inside reason/ itself.
+    """
+    if raw is None:
+        return None
+    detected_at = raw.get("detected_at")
+    if isinstance(detected_at, str):
+        detected_at = datetime.fromisoformat(detected_at)
+    return Signal(
+        signal_type=raw["signal_type"],
+        entity_type=raw["entity_type"],
+        entity_id=raw["entity_id"],
+        severity=raw["severity"],
+        summary=raw["summary"],
+        raw_metric=raw.get("raw_metric") or {},
+        org_id=raw["org_id"],
+        detected_at=detected_at,
+        source=raw.get("source", ""),
+        context=raw.get("context") or {},
+    )
+
+
 def reason_node(state: TopState) -> dict:
     result = run_reason(
-        signal=state.get("signal"),
+        signal=_signal_from_dict(state.get("signal")),
         question=state.get("question"),
         org_id=state.get("org_id"),
         persona=state.get("persona"),
     )
+    # BUGFIX (found while wiring the /threads/{id}/trace and /dashboard API
+    # endpoints against this graph's checkpointed state): ReasonState's actual
+    # key is "research_result" (app/graph/reason/state.py), not
+    # "research_context" -- this line always returned {} for TopState's
+    # research_context, silently dropping TH2/TH4's research-agent output from
+    # every downstream reader (trace drawer, dashboard cards, root-cause
+    # synthesis inputs already read the raw ReasonState directly so were
+    # unaffected, but anything reading TopState.research_context was not).
     return {
         "org_id": result.get("org_id", state.get("org_id")),
         "sql_question": result.get("sql_question", ""),
         "sql_result": result.get("sql_result", {}),
-        "research_context": result.get("research_context", {}),
+        "research_context": result.get("research_result", {}),
         "impact_context": result.get("impact_context", {}),
         "decision": result.get("decision", {}),
     }

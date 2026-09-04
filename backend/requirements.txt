@@ -1,15 +1,36 @@
-# Backend app dependencies. Grows as other subsystems (reason/act/api) land;
-# this initial set covers the data contract layer and the sense subgraph.
+# Consolidated backend dependencies (plan §11: "fold into a single
+# backend/requirements.txt once that lands" -- every subsystem's own
+# per-component requirements.txt is kept in place for standalone
+# verification, this file is what the actual app/Docker image installs from).
+
+# -- data contract layer + sense subgraph --
 PyYAML>=6.0
 SQLAlchemy>=2.0
 psycopg[binary]>=3.1
 asyncpg>=0.29
 langgraph>=0.2
 
-# app/checkpointer.py + app/graph/{supervisor,graph}.py + app/schedulers/ --
-# the top-level wiring, on top of what reason/act/sense/llm's own
-# requirements.txt files already cover (fold everything into one file/
-# pyproject.toml once the FastAPI backend agent lands).
-langgraph-checkpoint-postgres>=2.0
+# -- checkpointer.py + graph/{supervisor,graph}.py + schedulers/ --
+langgraph-checkpoint-postgres>=3.1
 psycopg-pool>=3.2
 apscheduler>=3.10
+
+# -- reason subgraph (sql_agent cluster + research_agent + root_cause LLM call) --
+langchain>=0.3
+langchain-core>=0.3
+langchain-community>=0.3
+langchain-openai>=0.2
+sqlglot>=25.0
+
+# -- act subgraph (redis pub/sub + html_report_agent) --
+redis>=5.0
+
+# -- llm/provider.py's Redis circuit breaker --
+# (redis>=5.0 above already covers this)
+
+# -- memory/ (LangMem BaseStore wiring) --
+langmem>=0.0.30
+
+# -- api/ (this integration layer: FastAPI app + WebSocket push) --
+fastapi>=0.115
+uvicorn[standard]>=0.30
