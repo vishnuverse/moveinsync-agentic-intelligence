@@ -72,6 +72,12 @@ from .state import TopState
 # list) -- "monthly_leadership" is.
 REPORT_TYPE_PERSONA: dict[str, str] = {
     "daily_digest": "transport_manager",
+    # GAP (found during a plan-vs-implementation audit): plan §1's LM2 is
+    # explicitly "Team-scoped Q&A + weekly digest" -- the weekly_digest value
+    # already existed in agent_reports' CHECK constraint (schema.sql) but was
+    # never added here, so Line Manager was the one persona with zero
+    # scheduled reports.
+    "weekly_digest": "line_manager",
     "monthly_leadership": "transport_head",
 }
 

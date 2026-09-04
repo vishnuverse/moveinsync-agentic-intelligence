@@ -42,7 +42,6 @@ export function TrendLineChart({ data, valueSuffix = "", compact = false, height
     xAxis: {
       categories: data.categories,
       visible: !compact,
-      labels: { step: Math.max(1, Math.floor(data.categories.length / 8)) },
     },
     yAxis: {
       visible: !compact,

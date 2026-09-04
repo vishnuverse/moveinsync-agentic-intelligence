@@ -3,6 +3,25 @@
 // updates in one place propagate to both the plain UI and the charts.
 import type { Options } from "highcharts";
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// BUGFIX (found live: rotation alone didn't fix the OTA Trend / No-Show Rate
+// x-axis -- a 30-day view still renders ~10 category labels after
+// Highcharts' own thinning, and a full "2026-07-02" string rotated -45 is
+// still wider than the ~23px tick spacing in a card-sized chart, so labels
+// kept visually colliding even though each one WAS correctly rotated).
+// Shortening only genuine ISO-date categories to "Jul 2" (leaving
+// non-date categories like "NODELAY"/"TRAFFIC" untouched) is what actually
+// makes them fit; kept here, not per-chart, for the same one-rule-for-every-
+// chart reason autoRotation above is shared.
+function formatAxisLabel(this: { value: string | number }): string {
+  const raw = String(this.value);
+  if (!ISO_DATE_RE.test(raw)) return raw;
+  const d = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 function cssVar(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -64,6 +83,7 @@ export function baseChartOptions(): Options {
         style: { color: c.textMuted, fontSize: "11px" },
         autoRotation: [-20, -45],
         autoRotationLimit: 60,
+        formatter: formatAxisLabel,
       },
     },
     yAxis: {
