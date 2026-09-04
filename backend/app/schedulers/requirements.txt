@@ -1,0 +1,7 @@
+# Dependencies for the scheduler service (backend/app/schedulers/).
+# Mirrors the per-component requirements.txt convention used elsewhere in
+# this repo -- fold into a single backend/requirements.txt or pyproject.toml
+# once that lands.
+
+apscheduler>=3.10
+asyncpg>=0.29

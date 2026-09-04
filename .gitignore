@@ -13,6 +13,12 @@ env/
 backend/.env
 .mcp.json
 
+# Raw real dataset (~550MB CSVs) -- never commit, see data/Dictionary/README.md
+/data/
+
+# Claude Code worktree scratch space
+.claude/worktrees/
+
 # IDE
 .vscode/
 .idea/

@@ -1,0 +1,30 @@
+-- Conversational memory (plan §6) -- LangGraph BaseStore/PostgresStore schema.
+--
+-- Deliberately NOT a set of CREATE TABLE statements applied alongside schema.sql.
+-- langgraph-checkpoint-postgres's PostgresStore owns and versions its own schema:
+-- backend/app/memory/store.get_memory_store() calls PostgresStore.setup() once per
+-- process, which idempotently creates/migrates whatever the installed library
+-- version needs. Hand-writing that DDL here would duplicate (and eventually drift
+-- from) the library's real migrations in langgraph.store.postgres.base.MIGRATIONS.
+--
+-- As of langgraph-checkpoint-postgres 3.1.2, .setup() creates, in the same database
+-- DATABASE_URL already points at (no separate schema/database):
+--
+--   store (
+--     prefix text NOT NULL,      -- the namespace tuple, "/"-joined (see namespaces.py)
+--     key text NOT NULL,
+--     value jsonb NOT NULL,
+--     created_at timestamptz DEFAULT now(),
+--     updated_at timestamptz DEFAULT now(),
+--     expires_at timestamptz,    -- TTL support, unused here (no ttl= config passed)
+--     ttl_minutes int,
+--     PRIMARY KEY (prefix, key)
+--   )
+--   + a btree index on prefix for namespace-prefix search/list_namespaces.
+--
+-- store_vectors (embedding-indexed semantic search over stored values) is only
+-- created if a PostgresIndexConfig is passed to PostgresStore -- this build does not
+-- configure one (no embeddings model wired), so recall here is exact
+-- namespace+key lookups (semantic prefs) or namespace-prefix listing (episodic/
+-- procedural), never a live CREATE TABLE, so there's nothing to run before
+-- backend/app/memory functions are called for the first time.

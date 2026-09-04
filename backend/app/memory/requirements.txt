@@ -1,0 +1,8 @@
+# Conversational memory (plan §6). langgraph-checkpoint-postgres is what actually
+# provides `langgraph.store.postgres.PostgresStore` (confirmed against its 3.1.2
+# source, not assumed -- see store.py); langmem is a real dependency of
+# episodic.summarize_episode_with_llm()'s optional LLM-summary path even though
+# the deterministic verification in this build doesn't exercise it.
+langgraph-checkpoint-postgres>=3.1
+psycopg[binary,pool]>=3.1
+langmem>=0.0.30

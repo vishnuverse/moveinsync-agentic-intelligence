@@ -210,3 +210,20 @@ entities:
       thread_id: thread_id
       generated_at: generated_at
       created_at: created_at
+
+  # research_agent's grounding source (plan §8 curated static benchmarks) --
+  # added by the supervisor-assembly agent (backend/app/graph/supervisor.py)
+  # while wiring the reason subgraph; additive only, does not touch any
+  # existing entity above.
+  benchmark:
+    table: sustainability_targets
+    columns:
+      id: id
+      org_id: org_id
+      metric_name: metric_name
+      target_value: target_value
+      threshold_value: threshold_value
+      unit: unit
+      period: period
+      notes: notes
+      created_at: created_at

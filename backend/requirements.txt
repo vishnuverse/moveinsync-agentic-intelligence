@@ -5,3 +5,11 @@ SQLAlchemy>=2.0
 psycopg[binary]>=3.1
 asyncpg>=0.29
 langgraph>=0.2
+
+# app/checkpointer.py + app/graph/{supervisor,graph}.py + app/schedulers/ --
+# the top-level wiring, on top of what reason/act/sense/llm's own
+# requirements.txt files already cover (fold everything into one file/
+# pyproject.toml once the FastAPI backend agent lands).
+langgraph-checkpoint-postgres>=2.0
+psycopg-pool>=3.2
+apscheduler>=3.10

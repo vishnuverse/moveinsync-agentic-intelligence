@@ -30,8 +30,25 @@ _SQL_FENCE_RE = re.compile(r"```sql\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 _BARE_SELECT_RE = re.compile(r"(SELECT\b.*)", re.IGNORECASE | re.DOTALL)
 
 _TRUNCATED_SENTINEL = "__GENERATION_TRUNCATED__"
-DEFAULT_GENERATE_MAX_TOKENS = 4096
-DEFAULT_ANSWER_MAX_TOKENS = 1024
+# Integrator's note (supervisor-assembly agent, wiring reason/ end-to-end):
+# bumped from 4096/1024. Confirmed live against the default provider (Sarvam
+# sarvam-105b) that it enforces its own server-side completion cap around
+# ~2048 tokens regardless of a higher client-requested max_tokens (observed
+# `finish_reason: "length"` with `completion_tokens: 2048` even when 16384 was
+# requested) -- so this constant cannot fully eliminate GenerationTruncated
+# for a schema-heavy question against this model/prompt combination (the full
+# multi-table DDL+sample-rows schema context here runs ~10K prompt tokens,
+# and the "think step-by-step" instruction can burn the entire ~2048-token
+# completion budget before reaching the SQL fence on a non-trivial
+# aggregate question). Simple/few-table questions still succeed on the first
+# attempt (verified live). Raising this default is still correct -- it's a
+# real ceiling for less output-capped providers/models -- but a genuine
+# GenerationTruncated failure on this specific model+schema-size combination
+# is a known limitation, not something this constant alone fixes; the
+# existing capped-retry + fail_closed path is the correct mitigation and
+# already handles it gracefully (see build report).
+DEFAULT_GENERATE_MAX_TOKENS = 8192
+DEFAULT_ANSWER_MAX_TOKENS = 2048
 
 
 def _extract_sql(text: str) -> str:
