@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { PersonaId, ReportMeta } from "../api";
+import { withTimeout } from "../lib/timeout";
+import { ErrorState } from "./AsyncStatus";
 import "./ReportsSection.css";
 
 function formatDate(ts: string): string {
@@ -9,17 +11,34 @@ function formatDate(ts: string): string {
 
 export function ReportsSection({ persona }: { persona: PersonaId }) {
   const [reports, setReports] = useState<ReportMeta[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
-  useEffect(() => {
-    setLoading(true);
-    api.getReports(persona).then((res) => {
-      setReports(res);
-      setLoading(false);
-    });
+  const load = useCallback(() => {
+    setStatus("loading");
+    withTimeout(api.getReports(persona))
+      .then((res) => {
+        setReports(res);
+        setStatus("ready");
+      })
+      .catch(() => setStatus("error"));
   }, [persona]);
 
-  if (loading) return null;
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (status === "loading") return null;
+  // This section is supplementary to the dashboard above it, so a failed
+  // fetch gets a compact inline retry rather than a full-height error state
+  // competing with the metrics/charts for attention.
+  if (status === "error") {
+    return (
+      <section className="reports-section">
+        <h3 className="reports-section-heading">Generated Reports</h3>
+        <ErrorState label="Couldn't load reports." onRetry={load} />
+      </section>
+    );
+  }
   if (reports.length === 0) return null;
 
   return (

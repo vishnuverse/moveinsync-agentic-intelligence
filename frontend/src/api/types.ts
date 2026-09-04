@@ -77,10 +77,48 @@ export interface ChatMessage {
 export interface ChatRequest {
   persona: PersonaId;
   message: string;
+  // Omitted only for the very first message of a brand-new conversation
+  // started through the legacy/implicit-create path -- the primary flow is
+  // "create a thread, then post into it" (see ChatPage/ChatThreadList).
+  thread_id?: string;
 }
 
 export interface ChatResponse {
   message: ChatMessage;
+}
+
+// Chat history feature: threads + the "select something to chat with" scope
+// picker (backend/app/api/chat.py, backend/app/services/{chat_threads,
+// scope_options}.py). `id` doubles as the LangGraph checkpoint thread_id, so
+// it's what TraceDrawer/getTrace already expects.
+export interface ChatThread {
+  id: string;
+  persona: PersonaId;
+  title: string;
+  scope_entity_type?: string | null;
+  scope_entity_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatThreadCreateRequest {
+  persona: PersonaId;
+  scope_entity_type?: string;
+  scope_entity_id?: string;
+}
+
+export interface ChatThreadRenameRequest {
+  title: string;
+}
+
+// `id` is a human/DB-grounded value (a vendor name, a route_code, a team
+// name, a region), not a numeric key -- see scope_options.py's docstring for
+// why: it gets sent back verbatim as scope_entity_id and prepended straight
+// into the NL question.
+export interface ScopeOption {
+  type: string;
+  id: string;
+  label: string;
 }
 
 export type ActivityTrigger = "schedule" | "event";
@@ -101,9 +139,33 @@ export interface ChartSeries {
   data: number[];
 }
 
+// vs-previous-window delta -- a second cheap SQL aggregate over the prior
+// equal-length window (see backend/app/services/chart_data.py), not an LLM
+// call, so charts can show "context, not just a number" at no extra cost.
+export interface ChartComparison {
+  label: string;
+  current_value: number;
+  previous_value: number;
+  delta_pct: number;
+}
+
+export interface ChartContributor {
+  name: string;
+  value: number;
+  pct: number;
+}
+
 export interface ChartSeriesData {
   categories: string[];
   series: ChartSeries[];
+  /** Benchmark reference value, sourced server-side from the seeded
+   * `sustainability_targets` table -- never a magic number in this file. */
+  target?: number;
+  breach_threshold?: number;
+  target_label?: string;
+  comparison?: ChartComparison;
+  /** Billing-discrepancy only: top vendors responsible for the gap. */
+  contributors?: ChartContributor[];
 }
 
 export interface PieSlice {
@@ -126,6 +188,8 @@ export interface VendorScorecardEntry {
   cost_per_km: number;
   incident_count: number;
   sla_trend: number[];
+  ontime_pct_current?: number;
+  ontime_pct_prev?: number;
 }
 
 export interface VendorScorecardData {
@@ -142,14 +206,19 @@ export interface ApiClient {
   ): Promise<ResumeDecisionResponse>;
   getTrace(threadId: string): Promise<TraceStep[]>;
   getReports(persona: PersonaId): Promise<ReportMeta[]>;
-  getChatHistory(persona: PersonaId): Promise<ChatMessage[]>;
+  getChatThreads(persona: PersonaId): Promise<ChatThread[]>;
+  createChatThread(body: ChatThreadCreateRequest): Promise<ChatThread>;
+  renameChatThread(id: string, body: ChatThreadRenameRequest): Promise<ChatThread>;
+  deleteChatThread(id: string): Promise<void>;
+  getThreadMessages(threadId: string): Promise<ChatMessage[]>;
+  getScopeOptions(persona: PersonaId): Promise<ScopeOption[]>;
   postChat(body: ChatRequest): Promise<ChatResponse>;
   getActivity(): Promise<ActivityEntry[]>;
-  getOtaTrend(): Promise<ChartSeriesData>;
-  getDelayReasons(): Promise<ChartSeriesData>;
-  getNoShowTrend(): Promise<ChartSeriesData>;
-  getAbsenceSplit(): Promise<PieChartData>;
-  getBillingDiscrepancy(): Promise<ChartSeriesData>;
-  getEmissionsByFuel(): Promise<ChartSeriesData>;
-  getVendorScorecard(): Promise<VendorScorecardData>;
+  getOtaTrend(days?: number): Promise<ChartSeriesData>;
+  getDelayReasons(days?: number): Promise<ChartSeriesData>;
+  getNoShowTrend(days?: number): Promise<ChartSeriesData>;
+  getAbsenceSplit(days?: number): Promise<PieChartData>;
+  getBillingDiscrepancy(months?: number): Promise<ChartSeriesData>;
+  getEmissionsByFuel(days?: number): Promise<ChartSeriesData>;
+  getVendorScorecard(days?: number): Promise<VendorScorecardData>;
 }

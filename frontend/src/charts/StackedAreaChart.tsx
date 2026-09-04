@@ -1,6 +1,8 @@
 import Highcharts from "highcharts";
 import type { ChartSeriesData } from "../api";
 import { baseChartOptions } from "./chartTheme";
+import { isChartSeriesEmpty } from "./chartHelpers";
+import { ChartEmptyState } from "./ChartPanel";
 import HighchartsReact from "./HighchartsReactCompat";
 import "./charts.css";
 
@@ -11,11 +13,12 @@ interface StackedAreaChartProps {
 }
 
 export function StackedAreaChart({ data, valueSuffix = "", height = 260 }: StackedAreaChartProps) {
+  if (isChartSeriesEmpty(data)) return <ChartEmptyState />;
+
   const options: Highcharts.Options = Highcharts.merge(baseChartOptions(), {
     chart: { type: "area", height },
     xAxis: {
       categories: data.categories,
-      labels: { step: Math.max(1, Math.floor(data.categories.length / 8)) },
     },
     yAxis: { labels: { format: `{value}${valueSuffix}` } },
     tooltip: { valueSuffix, shared: true },

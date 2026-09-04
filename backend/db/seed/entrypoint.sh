@@ -1,11 +1,16 @@
 #!/bin/sh
-# docker-compose `seed` service entrypoint (plan §9): applies the schema in
-# order, then runs the synthetic data generator. Idempotent enough for a demo
-# restart -- schema.sql/triggers.sql use CREATE TABLE/CREATE OR REPLACE
-# (triggers.sql also DROPs its own triggers first), api_schema.sql uses
-# CREATE TABLE IF NOT EXISTS, and generate.py TRUNCATEs its own tables before
-# reseeding (see backend/db/README.md) -- so re-running this container on an
-# already-seeded volume is safe, not just safe on a fresh one.
+# docker-compose `seed` service entrypoint (plan §9): applies the schema,
+# then seeds synthetic data and (if present) ingests the real dataset --
+# each stage gated to run exactly once per postgres volume, not on every
+# `docker compose up`. First run on a fresh volume: full schema + synthetic
+# seed + real-data ingest (if data/ has CSVs). Every later run: each stage
+# checks its own tables and skips if already populated, so a plain restart
+# comes back up in seconds instead of re-TRUNCATEing synthetic data and
+# re-running the ~550MB real-data ingest ("the slow part") from scratch.
+# Dropping real CSVs into data/ *after* the first boot still gets picked up
+# on the next `docker compose up`, since that stage's gate is independent.
+# To force a full re-seed of everything, wipe the volume: `docker compose
+# down -v`.
 set -eu
 
 echo "seed: waiting for postgres at $DATABASE_URL"
@@ -35,8 +40,17 @@ fi
 echo "seed: applying api_schema.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/api_schema.sql
 
-echo "seed: generating synthetic data"
-python db/seed/generate.py
+# generate.py TRUNCATEs+reinserts its own tables every call (see
+# backend/db/README.md), which is safe but throws away anything a demo user
+# did in the app and burns time on every restart -- so only run it the first
+# time `teams` (its first INSERT target) is actually empty.
+SYNTHETIC_SEEDED=$(psql "$DATABASE_URL" -tAc "SELECT EXISTS (SELECT 1 FROM teams)")
+if [ "$SYNTHETIC_SEEDED" = "t" ]; then
+    echo "seed: synthetic data already present (teams is non-empty), skipping generate.py"
+else
+    echo "seed: generating synthetic data"
+    python db/seed/generate.py
+fi
 
 # Real-data ingestion (backend/config/data_contract.yaml, the active
 # default, points at mis.* -- see backend/db/real_data/README.md). Only
@@ -46,8 +60,13 @@ python db/seed/generate.py
 # should still boot cleanly on synthetic data alone (data_contract.yaml
 # would then point at empty mis.* tables -- flip DATA_CONTRACT_PATH to
 # data_contract.synthetic.yaml in that case, per this seed job's own
-# skip-message below).
-if [ -n "${DATA_DIR:-}" ] && [ -f "${DATA_DIR}/emp_Data.csv" ]; then
+# skip-message below). Gated on `mis.trip` (ingest.py's fact table) already
+# having rows, independent of the synthetic gate above, so this stage alone
+# re-runs if CSVs show up in a later `docker compose up`.
+REAL_DATA_INGESTED=$(psql "$DATABASE_URL" -tAc "SELECT CASE WHEN to_regclass('mis.trip') IS NULL THEN false ELSE EXISTS (SELECT 1 FROM mis.trip) END")
+if [ "$REAL_DATA_INGESTED" = "t" ]; then
+    echo "seed: real data already ingested (mis.trip is non-empty), skipping ingest.py"
+elif [ -n "${DATA_DIR:-}" ] && [ -f "${DATA_DIR}/emp_Data.csv" ]; then
     echo "seed: real data found at $DATA_DIR, running real-data ingestion"
     python db/real_data/ingest.py
 

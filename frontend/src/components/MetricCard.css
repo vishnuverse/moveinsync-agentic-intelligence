@@ -1,29 +1,17 @@
+/* Deliberately no border-left accent stripe here -- that "colored bar down
+   one side of a card" pattern is one of the most recognizable AI-generated-
+   UI tells (flagged by the design detector on this exact rule). Severity is
+   carried by the badge plus a small inline dot instead of a structural
+   border. */
 .metric-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border-soft);
-  border-left: 4px solid var(--color-border-soft);
   border-radius: var(--radius-md);
   padding: var(--space-4) var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   box-shadow: var(--shadow-sm);
-}
-
-.metric-card-good {
-  border-left-color: var(--color-good);
-}
-
-.metric-card-warning {
-  border-left-color: var(--color-warning);
-}
-
-.metric-card-critical {
-  border-left-color: var(--color-critical);
-}
-
-.metric-card-neutral {
-  border-left-color: var(--color-secondary);
 }
 
 .metric-card-top {
@@ -34,9 +22,35 @@
 }
 
 .metric-card-label {
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--color-text-muted);
+}
+
+.metric-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.metric-card-dot-good {
+  background: var(--color-good);
+}
+
+.metric-card-dot-warning {
+  background: var(--color-warning);
+}
+
+.metric-card-dot-critical {
+  background: var(--color-critical);
+}
+
+.metric-card-dot-neutral {
+  background: var(--color-secondary);
 }
 
 .metric-card-value-row {
@@ -46,18 +60,22 @@
 }
 
 .metric-card-value {
-  font-size: 28px;
+  font-size: var(--text-3xl);
   font-weight: 700;
   color: var(--color-heading);
 }
 
+/* Direction (up/down/flat) is not itself good or bad -- rising on-time %
+   is good, rising cost isn't -- that judgment already lives in `severity`,
+   so the arrow stays neutral rather than guessing a color from direction
+   alone. */
 .metric-card-trend {
-  font-size: 12px;
+  display: inline-flex;
   color: var(--color-gray);
 }
 
 .metric-card-context {
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text);
   line-height: 1.5;
   flex: 1;

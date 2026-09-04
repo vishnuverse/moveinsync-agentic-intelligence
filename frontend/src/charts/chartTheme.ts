@@ -54,7 +54,17 @@ export function baseChartOptions(): Options {
     xAxis: {
       lineColor: c.borderSoft,
       tickColor: c.borderSoft,
-      labels: { style: { color: c.textMuted, fontSize: "11px" } },
+      // One shared rule for every chart wrapper instead of each picking its
+      // own label-thinning strategy (found live: TrendLineChart's fixed
+      // `step` skip left OTA Trend/No-Show Rate labels overlapping into
+      // smashed text at higher category counts, while StackedAreaChart's
+      // reliance on Highcharts' own auto-rotation held up fine for the same
+      // kind of daily-category data).
+      labels: {
+        style: { color: c.textMuted, fontSize: "11px" },
+        autoRotation: [-20, -45],
+        autoRotationLimit: 60,
+      },
     },
     yAxis: {
       gridLineColor: c.borderSoft,

@@ -8,6 +8,7 @@ import type {
   PieChartData,
   ReportMeta,
   Role,
+  ScopeOption,
   TraceStep,
   VendorScorecardData,
 } from "./types";
@@ -572,6 +573,38 @@ export function initialChatHistory(persona: PersonaId): ChatMessage[] {
   ];
 }
 
+// "Select something to chat with" scope picker (mock mirror of
+// backend/app/services/scope_options.py) -- same persona -> entity mapping,
+// same "id is a human/DB-grounded value, not a numeric key" shape, reusing
+// the vendor/route names already established elsewhere in this mock data
+// (vendorScorecardMock, the "Route 14" narrative) so a mocked scoped chat
+// reads consistently with the rest of the demo.
+const MOCK_VENDORS = ["Metro Cabs", "QuickRide", "CityLink Fleet", "Swift Commute", "Urban Wheels"];
+const MOCK_ROUTES: Array<[string, string]> = [
+  ["RT-14", "Whitefield – Electronic City"],
+  ["RT-07", "Koramangala – MG Road"],
+  ["RT-22", "Indiranagar – HSR Layout"],
+];
+const MOCK_TEAMS = ["Engineering", "Sales", "Customer Success", "Operations", "Finance", "People & Talent"];
+const MOCK_REGIONS = ["North", "South", "East", "West", "Central"];
+
+export function scopeOptionsFor(persona: PersonaId): ScopeOption[] {
+  if (persona === "line_manager") {
+    return MOCK_TEAMS.map((name) => ({ type: "team", id: name, label: name }));
+  }
+  const vendorOptions: ScopeOption[] = MOCK_VENDORS.map((name) => ({ type: "vendor", id: name, label: name }));
+  if (persona === "transport_manager") {
+    const routeOptions: ScopeOption[] = MOCK_ROUTES.map(([code, name]) => ({
+      type: "route",
+      id: code,
+      label: `${code} — ${name}`,
+    }));
+    return [...vendorOptions, ...routeOptions];
+  }
+  const regionOptions: ScopeOption[] = MOCK_REGIONS.map((name) => ({ type: "region", id: name, label: name }));
+  return [...vendorOptions, ...regionOptions];
+}
+
 const RAW_ACTIVITY_LOG: ActivityEntry[] = [
   {
     id: "act-1",
@@ -670,9 +703,11 @@ function isoDaysBack(daysBack: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function otaTrendMock(): ChartSeriesData {
+// Benchmark values below mirror the real seeded `sustainability_targets` rows
+// (backend/db/schema.sql + backend/db/seed) so mock mode demonstrates the
+// same "context, not just a number" chart chrome the real API returns.
+export function otaTrendMock(days = 45): ChartSeriesData {
   const rand = seededRandom(7);
-  const days = 45;
   const categories: string[] = [];
   const data: number[] = [];
   for (let i = days - 1; i >= 0; i -= 1) {
@@ -680,26 +715,54 @@ export function otaTrendMock(): ChartSeriesData {
     const dip = i < 5 ? -3 : 0; // recent dip, matches the "Route 14" narrative elsewhere in the mock data
     data.push(Math.round((92 + rand() * 5 - 2 + dip) * 10) / 10);
   }
-  return { categories, series: [{ name: "On-Time Arrival %", data }] };
-}
-
-export function delayReasonsMock(): ChartSeriesData {
+  const current = data[data.length - 1] ?? 91;
   return {
-    categories: ["NODELAY", "TRAFFIC", "DRIVER", "EMPLOYEE", "WEATHER", "VEHICLE_BREAKDOWN"],
-    series: [{ name: "Trips", data: [48210, 9840, 6120, 3040, 1180, 640] }],
+    categories,
+    series: [{ name: "On-Time Arrival %", data }],
+    target: 95,
+    breach_threshold: 92,
+    target_label: "SLA target (95%)",
+    comparison: {
+      label: `vs previous ${days}d`,
+      current_value: current,
+      previous_value: Math.round((current + 1.4) * 10) / 10,
+      delta_pct: -1.4,
+    },
   };
 }
 
-export function noShowTrendMock(): ChartSeriesData {
+export function delayReasonsMock(days = 90): ChartSeriesData {
+  return {
+    categories: ["NODELAY", "TRAFFIC", "DRIVER", "EMPLOYEE", "WEATHER", "VEHICLE_BREAKDOWN"],
+    series: [{ name: "Trips", data: [48210, 9840, 6120, 3040, 1180, 640] }],
+    comparison: {
+      label: `flagged delays vs previous ${days}d`,
+      current_value: 20820,
+      previous_value: 19340,
+      delta_pct: 7.7,
+    },
+  };
+}
+
+export function noShowTrendMock(days = 45): ChartSeriesData {
   const rand = seededRandom(13);
-  const days = 45;
   const categories: string[] = [];
   const data: number[] = [];
   for (let i = days - 1; i >= 0; i -= 1) {
     categories.push(isoDaysBack(i));
     data.push(Math.round((5.5 + rand() * 4 - 2) * 10) / 10);
   }
-  return { categories, series: [{ name: "No-Show Rate %", data }] };
+  const current = data[data.length - 1] ?? 6.1;
+  return {
+    categories,
+    series: [{ name: "No-Show Rate %", data }],
+    comparison: {
+      label: `vs previous ${days}d`,
+      current_value: current,
+      previous_value: Math.round((current - 0.8) * 10) / 10,
+      delta_pct: 0.8,
+    },
+  };
 }
 
 export function absenceSplitMock(): PieChartData {
@@ -716,18 +779,34 @@ export function absenceSplitMock(): PieChartData {
   };
 }
 
-export function billingDiscrepancyMock(): ChartSeriesData {
+export function billingDiscrepancyMock(months = 6): ChartSeriesData {
+  const allCategories = ["Apr 2026", "May 2026", "Jun 2026", "Jul 2026", "Aug 2026", "Sep 2026"];
+  const categories = allCategories.slice(Math.max(0, allCategories.length - months));
+  const n = categories.length;
+  const metroCabs = [162000, 151000, 189000, 205000, 178000, 156000].slice(-n);
+  const quickRide = [118000, 109000, 132000, 141000, 126000, 114000].slice(-n);
+  const other = [132000, 128500, 144200, 155800, 143300, 128600].slice(-n);
+  const totalMetro = metroCabs.reduce((a, b) => a + b, 0);
+  const totalQuick = quickRide.reduce((a, b) => a + b, 0);
+  const totalOther = other.reduce((a, b) => a + b, 0);
+  const grandTotal = totalMetro + totalQuick + totalOther;
   return {
-    categories: ["Apr 2026", "May 2026", "Jun 2026", "Jul 2026", "Aug 2026", "Sep 2026"],
+    categories,
     series: [
-      { name: "Billing Discrepancy (₹)", data: [412000, 388500, 465200, 501800, 447300, 398600] },
+      { name: "Metro Cabs", data: metroCabs },
+      { name: "QuickRide", data: quickRide },
+      { name: "Other vendors", data: other },
+    ],
+    contributors: [
+      { name: "Metro Cabs", value: totalMetro, pct: Math.round((totalMetro / grandTotal) * 1000) / 10 },
+      { name: "QuickRide", value: totalQuick, pct: Math.round((totalQuick / grandTotal) * 1000) / 10 },
     ],
   };
 }
 
-export function emissionsByFuelMock(): ChartSeriesData {
+export function emissionsByFuelMock(days = 90): ChartSeriesData {
   const rand = seededRandom(21);
-  const weeks = 12;
+  const weeks = Math.max(4, Math.round(days / 7));
   const categories: string[] = [];
   const diesel: number[] = [];
   const petrol: number[] = [];
@@ -745,10 +824,19 @@ export function emissionsByFuelMock(): ChartSeriesData {
       { name: "Petrol", data: petrol },
       { name: "Electric", data: electric },
     ],
+    target: 82,
+    breach_threshold: 82,
+    target_label: "ICE baseline (82 gCO2/pkm)",
+    comparison: {
+      label: "fleet avg gCO2/passenger-km vs ICE baseline",
+      current_value: 74,
+      previous_value: 82,
+      delta_pct: -9.8,
+    },
   };
 }
 
-export function vendorScorecardMock(): VendorScorecardData {
+export function vendorScorecardMock(days = 90): VendorScorecardData {
   const rand = seededRandom(29);
   const vendors = [
     "Metro Cabs",
@@ -760,15 +848,19 @@ export function vendorScorecardMock(): VendorScorecardData {
     "Prime Shuttle",
     "Reliable Rides",
   ];
+  void days;
   return {
     vendors: vendors.map((vendor, idx) => {
       const sparkline = Array.from({ length: 10 }, () => Math.round((90 + rand() * 8 - 4) * 10) / 10);
+      const ontimeCurrent = sparkline[sparkline.length - 1];
       return {
         vendor,
         sla_pct: idx === 0 ? 88.4 : Math.round((90 + rand() * 8) * 10) / 10,
         cost_per_km: Math.round((13.5 + rand() * 4) * 100) / 100,
         incident_count: idx === 0 ? 4 : Math.floor(rand() * 3),
         sla_trend: sparkline,
+        ontime_pct_current: ontimeCurrent,
+        ontime_pct_prev: Math.round((ontimeCurrent + (idx === 0 ? 3.1 : rand() * 2 - 1)) * 10) / 10,
       };
     }),
   };

@@ -46,15 +46,9 @@ def _normalize_pg_url(database_url: str) -> str:
 
 
 def _active_schema() -> str | None:
-    """BUGFIX (found live: chat/reason answers were grounded against the
-    synthetic public.safety_incidents table even with the real-data contract
-    active) -- SQLDatabase.from_uri() with no `schema=` introspects whatever
-    the connection's default search_path exposes (`public` only), completely
-    independent of data_contract.yaml's `table: mis.trip` mapping used
-    everywhere else in this codebase. Derives the schema the SAME way the
-    contract already does it (the `trip` entity's table name, split on
-    `.`) so the SQL agent stays consistent with every other contract-resolved
-    query without adding a second schema config to keep in sync."""
+    """Derives the active contract's schema from the `trip` entity's table
+    name (split on `.`), the same source of truth used everywhere else in
+    this codebase, so this never needs a second config to keep in sync."""
     try:
         from app.contracts import get_contract
 
@@ -64,15 +58,55 @@ def _active_schema() -> str | None:
     return table.split(".", 1)[0] if "." in table else None
 
 
+def _contract_table_names() -> list[str] | None:
+    """BUGFIX (found live: with search_path set but no include_tables filter,
+    SQLAlchemy's `get_table_names(schema=None)` returned an unqualified,
+    unlabeled UNION of every schema's tables -- both `mis.incident` and the
+    old synthetic `public.safety_incidents` showed up in the same flat list
+    as bare `incident` / `safety_incidents`, with nothing telling the LLM
+    which one is real. It picked `safety_incidents` -- a plausible-sounding
+    guess, not a grounded answer, and the mandatory "grounded, not
+    hallucinated" story broke silently. Restricting to exactly the contract's
+    own entity tables (unqualified; `search_path` resolves them correctly)
+    removes the ambiguity at the source, and as a side effect keeps
+    checkpointer/store/pipeline_runs internals out of the LLM's schema
+    entirely -- it only ever sees the tables it's actually meant to answer
+    questions about."""
+    try:
+        from app.contracts import get_contract
+
+        contract = get_contract()
+        return sorted({contract.entity(name).table.split(".", 1)[-1] for name in contract.entity_names})
+    except Exception:
+        return None
+
+
 @functools.lru_cache(maxsize=8)
 def _build_database(database_url: str, statement_timeout_ms: int) -> SQLDatabase:
     schema = _active_schema()
+    # Deliberately NOT passing schema= to SQLDatabase.from_uri(): langchain_
+    # community's SQLDatabase._execute() unconditionally runs
+    # `SET search_path TO %s` as a driver-parameterized statement whenever
+    # self._schema is set (postgresql branch) -- Postgres's SET does not
+    # accept bind parameters, so that raises `SyntaxError: at or near "$1"`
+    # on every single query execution once schema= is set (found live,
+    # confirmed by reading langchain_community's actual installed source).
+    # search_path is set at the CONNECTION level instead (same connect_args
+    # mechanism statement_timeout already uses below), which fixes query
+    # EXECUTION -- but get_table_names(schema=None) still ignores search_path
+    # for introspection (confirmed live: it returns a flat, unlabeled union
+    # of every schema's tables, e.g. both bare `incident` and bare
+    # `safety_incidents`), so include_tables= is what actually disambiguates
+    # what the LLM sees -- see _contract_table_names()'s own docstring.
+    options = f"-c statement_timeout={statement_timeout_ms}"
+    if schema:
+        options += f" -c search_path={schema},public"
     return SQLDatabase.from_uri(
         _normalize_pg_url(database_url),
-        schema=schema,
+        include_tables=_contract_table_names(),
         sample_rows_in_table_info=3,
         engine_args={
-            "connect_args": {"options": f"-c statement_timeout={statement_timeout_ms}"},
+            "connect_args": {"options": options},
             "pool_pre_ping": True,
         },
     )

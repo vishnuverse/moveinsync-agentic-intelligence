@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { NotificationItem, NotificationStatus } from "../api";
 import { useAppState } from "../state/AppStateContext";
+import { EmptyState, ErrorState, LoadingState } from "./AsyncStatus";
+import { withTimeout } from "../lib/timeout";
 import "./NotificationInbox.css";
 
 const SEVERITY_BADGE: Record<NotificationItem["severity"], string> = {
@@ -40,14 +42,16 @@ function formatTime(ts: string): string {
 export function NotificationInbox() {
   const { persona, uiState, setSelectedNotification, openTrace, onResolved } = useAppState();
   const [items, setItems] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const load = useCallback(() => {
-    setLoading(true);
-    api.getNotifications(persona).then((res) => {
-      setItems(res);
-      setLoading(false);
-    });
+    setStatus("loading");
+    withTimeout(api.getNotifications(persona))
+      .then((res) => {
+        setItems(res);
+        setStatus("ready");
+      })
+      .catch(() => setStatus("error"));
   }, [persona]);
 
   useEffect(() => {
@@ -70,11 +74,14 @@ export function NotificationInbox() {
 
   return (
     <div className="notification-inbox">
-      {loading && <p className="notification-empty">Loading notifications…</p>}
-      {!loading && sorted.length === 0 && (
-        <p className="notification-empty">No notifications for this persona right now.</p>
+      {status === "loading" && <LoadingState label="Loading notifications…" />}
+      {status === "error" && (
+        <ErrorState label="Couldn't load notifications." onRetry={load} />
       )}
-      {!loading &&
+      {status === "ready" && sorted.length === 0 && (
+        <EmptyState label="No notifications for this persona right now." />
+      )}
+      {status === "ready" &&
         sorted.map((item) => (
           <button
             key={item.id}
@@ -84,6 +91,10 @@ export function NotificationInbox() {
             onClick={() => handleOpen(item)}
           >
             <div className="notification-item-top">
+              <span
+                className={`notification-item-dot notification-item-dot-${item.status}`}
+                aria-hidden="true"
+              />
               <span className={`badge ${SEVERITY_BADGE[item.severity]}`}>{item.severity}</span>
               <span className={`badge ${STATUS_BADGE[item.status]}`}>
                 {STATUS_LABEL[item.status]}

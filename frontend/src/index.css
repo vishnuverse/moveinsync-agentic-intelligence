@@ -12,7 +12,7 @@ body {
 
 body {
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1.5;
   color: var(--color-text);
   background: var(--color-background);
@@ -21,6 +21,32 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+/* Every interactive element relied on the unstyled browser default before
+   this -- the chat input was the only thing in the whole codebase with an
+   explicit :focus style. One rule, applied everywhere via :focus-visible so
+   it only shows for keyboard/assistive-tech navigation, not mouse clicks. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 h1,
@@ -48,10 +74,12 @@ a {
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
+  min-height: 44px;
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-4);
-  font-size: 14px;
+  font-size: var(--text-md);
   font-weight: 600;
   border: 1px solid transparent;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -98,7 +126,7 @@ a {
   gap: var(--space-1);
   padding: 2px var(--space-2);
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -125,16 +153,19 @@ a {
 
 .badge-info {
   background: var(--color-info-bg);
-  color: #1c6fa5;
+  color: var(--color-info-text);
 }
 
 .link-btn {
   background: none;
   border: none;
   padding: 0;
-  color: var(--color-primary);
-  font-size: 13px;
+  color: var(--color-primary-strong);
+  font-size: var(--text-base);
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .link-btn:hover {

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+import logoMark from "./assets/moveinsync-mark.svg";
 import { RoleSwitcher } from "./components/RoleSwitcher";
 import { TraceDrawer } from "./components/TraceDrawer";
-import { AppStateProvider } from "./state/AppStateContext";
+import { AppStateProvider, useAppState } from "./state/AppStateContext";
 import { ActivityPage } from "./pages/ActivityPage";
 import { ChatPage } from "./pages/ChatPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -19,13 +20,29 @@ const NAV_ITEMS: Array<{ id: NavView; label: string }> = [
 
 function AppShell() {
   const [view, setView] = useState<NavView>("dashboard");
+  const { uiState, closeTrace } = useAppState();
+
+  // Escape closes the trace drawer from anywhere -- the only keyboard
+  // shortcut this operate-mode surface has today, but a cheap and
+  // high-value one for a panel with no other dismiss affordance besides a
+  // 44x44 button or clicking the scrim.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && uiState.trace.open) closeTrace();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [uiState.trace.open, closeTrace]);
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="app-header-brand">
-          <span className="app-header-logo">MoveInSync</span>
-          <span className="app-header-subtitle">Agentic Intelligence</span>
+          <img src={logoMark} alt="MoveInSync" className="app-header-logo" width={30} height={28} />
+          <div className="app-header-brand-text">
+            <span className="app-header-wordmark">MoveInSync</span>
+            <span className="app-header-subtitle">Agentic Intelligence</span>
+          </div>
         </div>
         <nav className="app-nav">
           {NAV_ITEMS.map((item) => (

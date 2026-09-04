@@ -1,0 +1,34 @@
+.time-range-selector {
+  display: inline-flex;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.time-range-btn {
+  border: none;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.time-range-btn + .time-range-btn {
+  border-left: 1px solid var(--color-border-soft);
+}
+
+.time-range-btn:hover {
+  background: var(--color-surface-muted);
+}
+
+.time-range-btn-active {
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.time-range-btn-active:hover {
+  background: var(--color-primary-hover);
+}

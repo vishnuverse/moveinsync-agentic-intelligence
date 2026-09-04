@@ -10,6 +10,8 @@ interface BreakdownBarChartProps {
   valuePrefix?: string;
   valueSuffix?: string;
   height?: number;
+  /** Stack series (e.g. per-vendor billing discrepancy) instead of grouping side by side. */
+  stacked?: boolean;
 }
 
 export function BreakdownBarChart({
@@ -18,8 +20,10 @@ export function BreakdownBarChart({
   valuePrefix = "",
   valueSuffix = "",
   height = 260,
+  stacked = false,
 }: BreakdownBarChartProps) {
   const c = chartColors();
+  const stacking = stacked ? "normal" : undefined;
   const options: Highcharts.Options = Highcharts.merge(baseChartOptions(), {
     chart: { type: horizontal ? "bar" : "column", height },
     xAxis: { categories: data.categories },
@@ -27,7 +31,7 @@ export function BreakdownBarChart({
     legend: { enabled: data.series.length > 1 },
     tooltip: { valuePrefix, valueSuffix, shared: true },
     plotOptions: {
-      series: { borderRadius: 4, borderWidth: 0 },
+      series: { borderRadius: stacked ? 0 : 4, borderWidth: 0, stacking },
       column: { groupPadding: 0.12, pointPadding: 0.05 },
       bar: { groupPadding: 0.12, pointPadding: 0.05 },
     },

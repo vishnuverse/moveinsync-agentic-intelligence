@@ -18,7 +18,7 @@ each piece is built the way it is.
 from __future__ import annotations
 
 from app.memory.background import wait_for_pending
-from app.memory.episodic import recall_episodes, remember_episode, summarize_episode_with_llm
+from app.memory.episodic import forget_thread, recall_episodes, remember_episode, summarize_episode_with_llm
 from app.memory.namespaces import MemoryKind, memory_namespace
 from app.memory.procedural import recall_known_mistakes, remember_query_errors
 from app.memory.semantic import recall_preference, recall_preferences, remember_preference
@@ -34,6 +34,7 @@ __all__ = [
     "recall_preference",
     "remember_episode",
     "recall_episodes",
+    "forget_thread",
     "summarize_episode_with_llm",
     "remember_query_errors",
     "recall_known_mistakes",

@@ -3,7 +3,7 @@
 }
 
 .reports-section-heading {
-  font-size: 15px;
+  font-size: var(--text-lg);
   margin-bottom: var(--space-3);
 }
 
@@ -31,13 +31,13 @@
 }
 
 .report-card-title {
-  font-size: 14px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--color-heading);
   margin-bottom: 2px;
 }
 
 .report-card-meta {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
 }

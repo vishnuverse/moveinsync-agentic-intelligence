@@ -1,0 +1,50 @@
+.async-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  padding: var(--space-4) 0;
+}
+
+.async-state-empty {
+  color: var(--color-text-muted);
+}
+
+.async-state-error {
+  color: var(--color-critical);
+  flex-wrap: wrap;
+}
+
+.async-state-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.async-state-retry {
+  margin-left: var(--space-2);
+  min-height: 32px;
+}
+
+.async-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-soft);
+  border-top-color: var(--color-primary);
+  animation: async-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .async-spinner {
+    animation-duration: 1.6s;
+  }
+}
+
+@keyframes async-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -19,11 +19,19 @@ export function RoleSwitcher() {
           key={role.id}
           role="tab"
           aria-selected={role.id === persona}
+          aria-describedby={`role-desc-${role.id}`}
           className={`role-switcher-btn ${role.id === persona ? "role-switcher-btn-active" : ""}`}
           onClick={() => setPersona(role.id)}
           title={role.description}
         >
           {role.name}
+          {/* The description used to live only in the `title` hover tooltip
+              above -- invisible to touch and most screen-reader flows. This
+              keeps the tooltip for sighted mouse users but gives everyone
+              else a real accessible description too. */}
+          <span id={`role-desc-${role.id}`} className="sr-only">
+            {role.description}
+          </span>
         </button>
       ))}
     </div>

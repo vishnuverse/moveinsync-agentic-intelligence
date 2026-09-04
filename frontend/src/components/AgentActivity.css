@@ -1,9 +1,7 @@
-.agent-activity-intro {
+.agent-activity-count {
   color: var(--color-text-muted);
-  font-size: 14px;
-  max-width: 640px;
-  margin-bottom: var(--space-5);
-  line-height: 1.5;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-3);
 }
 
 .agent-activity-list {
@@ -68,13 +66,17 @@
 }
 
 .agent-activity-source {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--color-text-muted);
 }
 
 .agent-activity-action {
-  font-size: 14px;
+  font-size: var(--text-md);
   color: var(--color-text);
   line-height: 1.5;
+}
+
+.agent-activity-more {
+  margin-top: var(--space-4);
 }

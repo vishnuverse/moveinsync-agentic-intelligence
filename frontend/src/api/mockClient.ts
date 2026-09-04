@@ -13,6 +13,7 @@ import {
   noShowTrendMock,
   otaTrendMock,
   reportsFor,
+  scopeOptionsFor,
   vendorScorecardMock,
 } from "./mockData";
 import type {
@@ -22,6 +23,9 @@ import type {
   ChatMessage,
   ChatRequest,
   ChatResponse,
+  ChatThread,
+  ChatThreadCreateRequest,
+  ChatThreadRenameRequest,
   MetricCardData,
   NotificationItem,
   PersonaId,
@@ -30,9 +34,11 @@ import type {
   ResumeDecisionRequest,
   ResumeDecisionResponse,
   Role,
+  ScopeOption,
   TraceStep,
   VendorScorecardData,
 } from "./types";
+import { CHAT_MESSAGE_MAX_LEN } from "./chatLimits";
 
 function delay(min = 220, max = 620): Promise<void> {
   const ms = min + Math.random() * (max - min);
@@ -45,15 +51,70 @@ const notificationStore: Record<PersonaId, NotificationItem[]> = {
   transport_head: initialNotifications("transport_head"),
 };
 
-const chatStore: Record<PersonaId, ChatMessage[]> = {
-  transport_manager: initialChatHistory("transport_manager"),
-  line_manager: initialChatHistory("line_manager"),
-  transport_head: initialChatHistory("transport_head"),
-};
-
 const traceStore: Record<string, TraceStep[]> = { ...TRACE_LIBRARY };
 
-let chatThreadCounter = 0;
+// --- Chat threads (mock mirror of chat_threads + episodic-memory-by-thread
+// on the real backend) -- one thread per conversation, messages keyed by
+// thread id so switching threads can never bleed history across them, same
+// isolation guarantee app/api/chat.py's module docstring describes for the
+// real store. Each persona starts with one seeded thread (the old
+// persona-wide greeting) so the mock UI isn't empty on first load.
+let threadCounter = 0;
+
+function newThreadId(persona: PersonaId): string {
+  threadCounter += 1;
+  return `${persona}:chat:mock-${threadCounter}`;
+}
+
+function defaultTitle(firstMessage?: string): string {
+  if (firstMessage && firstMessage.trim()) {
+    const flat = firstMessage.trim().replace(/\s+/g, " ");
+    return flat.length > 40 ? `${flat.slice(0, 40).trimEnd()}…` : flat;
+  }
+  return "New conversation";
+}
+
+const threadStore: Record<PersonaId, ChatThread[]> = {
+  transport_manager: [],
+  line_manager: [],
+  transport_head: [],
+};
+const messageStore: Record<string, ChatMessage[]> = {};
+
+function seedDefaultThread(persona: PersonaId): void {
+  const id = newThreadId(persona);
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id,
+    persona,
+    title: "Welcome",
+    scope_entity_type: null,
+    scope_entity_id: null,
+    created_at: now,
+    updated_at: now,
+  };
+  threadStore[persona] = [thread];
+  messageStore[id] = initialChatHistory(persona).map((m) => ({ ...m, thread_id: id }));
+}
+(Object.keys(threadStore) as PersonaId[]).forEach(seedDefaultThread);
+
+function findThread(threadId: string): ChatThread | undefined {
+  for (const persona of Object.keys(threadStore) as PersonaId[]) {
+    const found = threadStore[persona].find((t) => t.id === threadId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function touchThread(threadId: string): void {
+  for (const persona of Object.keys(threadStore) as PersonaId[]) {
+    const idx = threadStore[persona].findIndex((t) => t.id === threadId);
+    if (idx !== -1) {
+      threadStore[persona][idx] = { ...threadStore[persona][idx], updated_at: new Date().toISOString() };
+      return;
+    }
+  }
+}
 
 const CHAT_TOPICS: Array<{
   keywords: string[];
@@ -166,32 +227,114 @@ export const mockClient: ApiClient = {
     return reportsFor(persona);
   },
 
-  async getChatHistory(persona: PersonaId): Promise<ChatMessage[]> {
+  async getChatThreads(persona: PersonaId): Promise<ChatThread[]> {
     await delay();
-    return [...chatStore[persona]];
+    return [...threadStore[persona]].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  },
+
+  async createChatThread(body: ChatThreadCreateRequest): Promise<ChatThread> {
+    await delay(150, 350);
+    const now = new Date().toISOString();
+    const thread: ChatThread = {
+      id: newThreadId(body.persona),
+      persona: body.persona,
+      title: "New conversation",
+      scope_entity_type: body.scope_entity_type ?? null,
+      scope_entity_id: body.scope_entity_id ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    threadStore[body.persona] = [thread, ...threadStore[body.persona]];
+    messageStore[thread.id] = [];
+    return thread;
+  },
+
+  async renameChatThread(id: string, body: ChatThreadRenameRequest): Promise<ChatThread> {
+    await delay(120, 280);
+    const title = body.title.trim();
+    if (!title) throw new Error("title must not be empty");
+    for (const persona of Object.keys(threadStore) as PersonaId[]) {
+      const idx = threadStore[persona].findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        const updated: ChatThread = { ...threadStore[persona][idx], title, updated_at: new Date().toISOString() };
+        threadStore[persona][idx] = updated;
+        return updated;
+      }
+    }
+    throw new Error(`chat thread ${id} not found`);
+  },
+
+  async deleteChatThread(id: string): Promise<void> {
+    await delay(120, 280);
+    for (const persona of Object.keys(threadStore) as PersonaId[]) {
+      threadStore[persona] = threadStore[persona].filter((t) => t.id !== id);
+    }
+    delete messageStore[id];
+  },
+
+  async getThreadMessages(threadId: string): Promise<ChatMessage[]> {
+    await delay();
+    return [...(messageStore[threadId] ?? [])];
+  },
+
+  async getScopeOptions(persona: PersonaId): Promise<ScopeOption[]> {
+    await delay(120, 280);
+    return scopeOptionsFor(persona);
   },
 
   async postChat(body: ChatRequest): Promise<ChatResponse> {
+    const trimmed = body.message.trim();
+    if (!trimmed) throw new Error("message must not be empty");
+    if (trimmed.length > CHAT_MESSAGE_MAX_LEN) {
+      throw new Error(`message must be ${CHAT_MESSAGE_MAX_LEN} characters or fewer`);
+    }
     await delay(400, 900);
     const { persona, message } = body;
+
+    let threadId = body.thread_id;
+    if (!threadId || !messageStore[threadId]) {
+      const now = new Date().toISOString();
+      const thread: ChatThread = {
+        id: newThreadId(persona),
+        persona,
+        title: defaultTitle(message),
+        scope_entity_type: null,
+        scope_entity_id: null,
+        created_at: now,
+        updated_at: now,
+      };
+      threadStore[persona] = [thread, ...threadStore[persona]];
+      messageStore[thread.id] = [];
+      threadId = thread.id;
+    }
+
     const userMsg: ChatMessage = {
       id: `${persona}-u-${Date.now()}`,
       role: "user",
       text: message,
-      created_at: new Date().toISOString(),
-    };
-    chatThreadCounter += 1;
-    const threadId = `chat-${persona}-${chatThreadCounter}`;
-    const category = pickCategory(message);
-    traceStore[threadId] = buildTrace(category, 1);
-    const agentMsg: ChatMessage = {
-      id: `${persona}-a-${Date.now()}`,
-      role: "agent",
-      text: pickAnswer(message, persona),
       thread_id: threadId,
       created_at: new Date().toISOString(),
     };
-    chatStore[persona] = [...chatStore[persona], userMsg, agentMsg];
+    const category = pickCategory(message);
+    traceStore[threadId] = buildTrace(category, 1);
+    // Mirrors app/api/chat.py's _compose_question: a scoped thread biases the
+    // canned answer toward the picked entity, same prompt-composition idea
+    // as the real backend applies to the NL question sent to the SQL agent.
+    const thread = findThread(threadId);
+    const baseAnswer = pickAnswer(message, persona);
+    const answerText =
+      thread?.scope_entity_type && thread?.scope_entity_id
+        ? `Regarding ${thread.scope_entity_type} '${thread.scope_entity_id}': ${baseAnswer}`
+        : baseAnswer;
+    const agentMsg: ChatMessage = {
+      id: `${persona}-a-${Date.now()}`,
+      role: "agent",
+      text: answerText,
+      thread_id: threadId,
+      created_at: new Date().toISOString(),
+    };
+    messageStore[threadId] = [...(messageStore[threadId] ?? []), userMsg, agentMsg];
+    touchThread(threadId);
     return { message: agentMsg };
   },
 
@@ -200,19 +343,19 @@ export const mockClient: ApiClient = {
     return ACTIVITY_LOG;
   },
 
-  async getOtaTrend(): Promise<ChartSeriesData> {
+  async getOtaTrend(days = 45): Promise<ChartSeriesData> {
     await delay();
-    return otaTrendMock();
+    return otaTrendMock(days);
   },
 
-  async getDelayReasons(): Promise<ChartSeriesData> {
+  async getDelayReasons(days = 90): Promise<ChartSeriesData> {
     await delay();
-    return delayReasonsMock();
+    return delayReasonsMock(days);
   },
 
-  async getNoShowTrend(): Promise<ChartSeriesData> {
+  async getNoShowTrend(days = 45): Promise<ChartSeriesData> {
     await delay();
-    return noShowTrendMock();
+    return noShowTrendMock(days);
   },
 
   async getAbsenceSplit(): Promise<PieChartData> {
@@ -220,18 +363,18 @@ export const mockClient: ApiClient = {
     return absenceSplitMock();
   },
 
-  async getBillingDiscrepancy(): Promise<ChartSeriesData> {
+  async getBillingDiscrepancy(months = 6): Promise<ChartSeriesData> {
     await delay();
-    return billingDiscrepancyMock();
+    return billingDiscrepancyMock(months);
   },
 
-  async getEmissionsByFuel(): Promise<ChartSeriesData> {
+  async getEmissionsByFuel(days = 90): Promise<ChartSeriesData> {
     await delay();
-    return emissionsByFuelMock();
+    return emissionsByFuelMock(days);
   },
 
-  async getVendorScorecard(): Promise<VendorScorecardData> {
+  async getVendorScorecard(days = 90): Promise<VendorScorecardData> {
     await delay();
-    return vendorScorecardMock();
+    return vendorScorecardMock(days);
   },
 };

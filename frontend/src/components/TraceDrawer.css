@@ -42,29 +42,34 @@
 }
 
 .trace-drawer-eyebrow {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--color-primary);
+  color: var(--color-primary-strong);
   margin: 0 0 var(--space-1);
 }
 
 .trace-drawer-header h3 {
-  font-size: 17px;
+  font-size: var(--text-xl);
 }
 
 .trace-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: calc(var(--space-1) * -1);
   background: none;
   border: none;
-  font-size: 16px;
+  border-radius: var(--radius-sm);
   color: var(--color-gray);
-  line-height: 1;
-  padding: var(--space-1);
 }
 
 .trace-drawer-close:hover {
   color: var(--color-heading);
+  background: var(--color-surface-muted);
 }
 
 .trace-drawer-body {
@@ -75,7 +80,7 @@
 
 .trace-drawer-loading {
   color: var(--color-text-muted);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .trace-steps {
@@ -129,18 +134,18 @@
 
 .trace-step-label {
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-heading);
 }
 
 .trace-step-time {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-gray);
 }
 
 .trace-step-detail {
   margin-top: var(--space-1);
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text);
   line-height: 1.5;
 }
@@ -152,7 +157,7 @@
   border-radius: var(--radius-sm);
   padding: var(--space-3);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.6;
   color: var(--color-heading);
   overflow-x: auto;
@@ -161,13 +166,55 @@
 
 .trace-drawer-footer {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--color-border-soft);
 }
 
 .trace-drawer-resolved {
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-good);
   font-weight: 600;
+}
+
+/* Reject is the operationally risky action -- deliberately quieter than the
+   filled Approve button rather than an equal-weight second CTA, and gated
+   behind an inline confirmation instead of firing immediately. */
+.trace-drawer-reject-trigger {
+  background: none;
+  border: none;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.trace-drawer-reject-trigger:hover {
+  color: var(--color-critical);
+}
+
+.trace-drawer-confirm {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.trace-drawer-confirm-text {
+  font-size: var(--text-base);
+  color: var(--color-text);
+}
+
+.trace-drawer-confirm-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.trace-drawer-error {
+  width: 100%;
+  font-size: var(--text-base);
+  color: var(--color-critical);
 }

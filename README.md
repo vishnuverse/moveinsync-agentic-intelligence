@@ -233,6 +233,47 @@ cat docs/PROBLEM_STATEMENT.md
 # Implement in src/agents/ directory
 ```
 
+### Running the Full Stack (Docker)
+
+```bash
+docker compose up --build
+```
+
+This boots postgres, redis, the backend/scheduler, the frontend, and a
+Cloudflare Tunnel — see the header comment in
+[`docker-compose.yml`](docker-compose.yml) for the public URL. The app works
+out of the box on generated synthetic data; no dataset download is required
+to run it.
+
+#### Optional: real dataset
+
+To run against the real (anonymised) MoveInSync dataset described in
+[`data/Dictionary/README.md`](data/Dictionary/README.md) instead of synthetic
+data:
+
+1. Download the dataset from
+   [this Google Drive folder](https://drive.google.com/drive/folders/1RXRWwqeoai6rNbzMp8W4ZMIcWT_u1VGj)
+   (**not included in this repo**: at ~670MB total, with one file over
+   GitHub's 100MB per-file limit, it can't be committed).
+2. Place the CSVs directly in `data/` at the repo root (gitignored — they
+   stay local, never get committed):
+   ```
+   data/
+   ├── Ride_data _trip-may_2026.csv
+   ├── Ride_data _trip-June_2026.csv
+   ├── Ride_data _trip-July_2026.csv
+   ├── emp_Data.csv
+   ├── bill_data.csv
+   ├── alerts_data.csv
+   └── trip_feedback.csv
+   ```
+3. Run `docker compose up --build`. The `seed` service ingests real data
+   automatically **the first time** it finds these files with an empty
+   database. On every later `docker compose up` (restart, code change, etc.)
+   it skips re-ingesting since the data's already there — so this is a
+   one-time step, not something that reruns on every boot. To force a full
+   re-ingest, drop the postgres volume first: `docker compose down -v`.
+
 ### Development Workflow
 
 1. **Choose your persona** - Transport manager, line manager, or transport head

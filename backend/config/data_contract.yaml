@@ -308,3 +308,15 @@ entities:
       thread_id: thread_id
       triggered_by: triggered_by
       created_at: created_at
+
+  chat_thread:
+    table: chat_threads
+    columns:
+      id: id
+      org_id: org_id
+      persona: persona
+      title: title
+      scope_entity_type: scope_entity_type
+      scope_entity_id: scope_entity_id
+      created_at: created_at
+      updated_at: updated_at

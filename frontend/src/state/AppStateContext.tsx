@@ -1,6 +1,25 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { NotificationStatus, PersonaId } from "../api";
+import type { ActivityEntry, NotificationStatus, PersonaId } from "../api";
+
+// A resolved approve/reject decision, kept client-side so it shows up
+// durably in Agent Activity instead of only as one ephemeral sentence in
+// the trace drawer that then closes. The backend's own pipeline_runs log
+// (app/services/activity_log.py) never writes a row for a resume decision
+// -- only autonomous scheduler/event runs -- so without this, a resolved
+// decision leaves no trace anywhere once the drawer shuts.
+const LOCAL_ACTIVITY_KEY = "moveinsync.localActivity.v1";
+
+function loadLocalActivity(): ActivityEntry[] {
+  try {
+    const raw = sessionStorage.getItem(LOCAL_ACTIVITY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 export interface TraceDrawerState {
   open: boolean;
@@ -44,6 +63,8 @@ interface AppStateValue {
   closeTrace: () => void;
   notifyResolved: (id: string, status: NotificationStatus) => void;
   onResolved: (fn: (id: string, status: NotificationStatus) => void) => () => void;
+  localActivity: ActivityEntry[];
+  recordActivity: (entry: ActivityEntry) => void;
 }
 
 const AppStateContext = createContext<AppStateValue | null>(null);
@@ -109,6 +130,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const [localActivity, setLocalActivity] = useState<ActivityEntry[]>(loadLocalActivity);
+
+  const recordActivity = useCallback((entry: ActivityEntry) => {
+    setLocalActivity((prev) => {
+      const next = [entry, ...prev].slice(0, 100);
+      try {
+        sessionStorage.setItem(LOCAL_ACTIVITY_KEY, JSON.stringify(next));
+      } catch {
+        // best-effort persistence -- private browsing / storage quota, fine to drop
+      }
+      return next;
+    });
+  }, []);
+
   const value = useMemo<AppStateValue>(
     () => ({
       persona,
@@ -119,6 +154,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       closeTrace,
       notifyResolved,
       onResolved,
+      localActivity,
+      recordActivity,
     }),
     [
       persona,
@@ -129,6 +166,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       closeTrace,
       notifyResolved,
       onResolved,
+      localActivity,
+      recordActivity,
     ],
   );
 

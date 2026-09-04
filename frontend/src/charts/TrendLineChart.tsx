@@ -14,6 +14,29 @@ interface TrendLineChartProps {
 
 export function TrendLineChart({ data, valueSuffix = "", compact = false, height }: TrendLineChartProps) {
   const c = chartColors();
+  const hasBenchmark = !compact && (data.target != null || data.breach_threshold != null);
+  const plotLines: Highcharts.YAxisPlotLinesOptions[] = [];
+  const plotBands: Highcharts.YAxisPlotBandsOptions[] = [];
+  if (hasBenchmark && data.target != null) {
+    plotLines.push({
+      value: data.target,
+      color: c.textMuted,
+      dashStyle: "Dash",
+      width: 1.5,
+      zIndex: 4,
+      label: { text: data.target_label ?? `Target ${data.target}${valueSuffix}`, style: { color: c.textMuted, fontSize: "10px" } },
+    });
+  }
+  if (hasBenchmark && data.breach_threshold != null) {
+    const axisValues = data.series.flatMap((s) => s.data);
+    const axisMin = Math.min(data.breach_threshold, ...axisValues, 0);
+    plotBands.push({
+      from: axisMin,
+      to: data.breach_threshold,
+      color: "rgba(179, 38, 30, 0.08)",
+      zIndex: 2,
+    });
+  }
   const options: Highcharts.Options = Highcharts.merge(baseChartOptions(), {
     chart: { type: "line", height: height ?? (compact ? 32 : 260) },
     xAxis: {
@@ -24,6 +47,8 @@ export function TrendLineChart({ data, valueSuffix = "", compact = false, height
     yAxis: {
       visible: !compact,
       labels: { format: `{value}${valueSuffix}` },
+      plotLines,
+      plotBands,
     },
     legend: { enabled: !compact && data.series.length > 1 },
     tooltip: {

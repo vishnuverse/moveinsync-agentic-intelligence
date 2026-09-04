@@ -1,6 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { ActivityEntry, PersonaId } from "../api";
+import { useAppState } from "../state/AppStateContext";
+import { withTimeout } from "../lib/timeout";
+import { EmptyState, ErrorState, LoadingState } from "./AsyncStatus";
+import { IconBolt, IconClock } from "./icons";
 import "./AgentActivity.css";
 
 const PERSONA_LABEL: Record<PersonaId, string> = {
@@ -8,6 +12,8 @@ const PERSONA_LABEL: Record<PersonaId, string> = {
   line_manager: "Line Manager",
   transport_head: "Transport Head",
 };
+
+const PAGE_SIZE = 25;
 
 function formatTime(ts: string): string {
   return new Date(ts).toLocaleString([], {
@@ -31,49 +37,87 @@ function activityKind(action: string): "retry" | "quiet" | "normal" {
 }
 
 export function AgentActivity() {
+  const { localActivity } = useAppState();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  const load = useCallback(() => {
+    setStatus("loading");
+    withTimeout(api.getActivity())
+      .then((res) => {
+        setEntries(res);
+        setStatus("ready");
+      })
+      .catch(() => setStatus("error"));
+  }, []);
 
   useEffect(() => {
-    api.getActivity().then((res) => {
-      setEntries(res);
-      setLoading(false);
-    });
-  }, []);
+    load();
+  }, [load]);
+
+  // Resolved approve/reject decisions are recorded locally (see
+  // AppStateContext) because the backend's pipeline_runs log only ever
+  // records autonomous scheduler/event runs, never a human's resume
+  // decision -- merging them in here is what makes that decision durable
+  // instead of visible only for the moment the trace drawer was open.
+  const merged = useMemo(() => {
+    const byId = new Set(entries.map((e) => e.id));
+    const extra = localActivity.filter((e) => !byId.has(e.id));
+    return [...extra, ...entries].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+  }, [entries, localActivity]);
+
+  const visible = merged.slice(0, visibleCount);
+  const remaining = merged.length - visible.length;
 
   return (
     <div className="agent-activity">
-      <p className="agent-activity-intro">
-        Autonomous runs across all personas — none of these were triggered by a person clicking
-        anything. Each row fired on a schedule tick or a live data event.
-      </p>
-      {loading && <p className="notification-empty">Loading activity…</p>}
-      {!loading && (
-        <ul className="agent-activity-list">
-          {entries.map((entry) => {
-            const kind = activityKind(entry.action);
-            return (
-              <li key={entry.id} className={`agent-activity-item agent-activity-item-${kind}`}>
-                <span
-                  className={`agent-activity-trigger agent-activity-trigger-${entry.triggered_by}`}
-                >
-                  {entry.triggered_by === "schedule" ? "⏱" : "⚡"}
-                </span>
-                <div className="agent-activity-body">
-                  <div className="agent-activity-meta">
-                    <span className="badge badge-neutral">{PERSONA_LABEL[entry.persona]}</span>
-                    <span className="agent-activity-source">
-                      {entry.triggered_by === "schedule" ? "Scheduled run" : "Event-triggered"}
-                    </span>
-                    <span className="notification-item-time">{formatTime(entry.timestamp)}</span>
-                    {kind === "retry" && <span className="badge badge-warning">Retrying</span>}
+      {status === "loading" && <LoadingState label="Loading activity…" />}
+      {status === "error" && <ErrorState label="Couldn't load the activity feed." onRetry={load} />}
+      {status === "ready" && merged.length === 0 && (
+        <EmptyState label="No autonomous runs recorded yet." />
+      )}
+      {status === "ready" && merged.length > 0 && (
+        <>
+          <p className="agent-activity-count">
+            Showing {visible.length} of {merged.length} run{merged.length === 1 ? "" : "s"}
+          </p>
+          <ul className="agent-activity-list">
+            {visible.map((entry) => {
+              const kind = activityKind(entry.action);
+              const TriggerIcon = entry.triggered_by === "schedule" ? IconClock : IconBolt;
+              return (
+                <li key={entry.id} className={`agent-activity-item agent-activity-item-${kind}`}>
+                  <span
+                    className={`agent-activity-trigger agent-activity-trigger-${entry.triggered_by}`}
+                  >
+                    <TriggerIcon width={14} height={14} />
+                  </span>
+                  <div className="agent-activity-body">
+                    <div className="agent-activity-meta">
+                      <span className="badge badge-neutral">{PERSONA_LABEL[entry.persona]}</span>
+                      <span className="agent-activity-source">
+                        {entry.triggered_by === "schedule" ? "Scheduled run" : "Event-triggered"}
+                      </span>
+                      <span className="notification-item-time">{formatTime(entry.timestamp)}</span>
+                      {kind === "retry" && <span className="badge badge-warning">Retrying</span>}
+                    </div>
+                    <p className="agent-activity-action">{entry.action}</p>
                   </div>
-                  <p className="agent-activity-action">{entry.action}</p>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                </li>
+              );
+            })}
+          </ul>
+          {remaining > 0 && (
+            <button
+              type="button"
+              className="btn btn-secondary agent-activity-more"
+              onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}
+            >
+              Show {Math.min(remaining, PAGE_SIZE)} more
+            </button>
+          )}
+        </>
       )}
     </div>
   );

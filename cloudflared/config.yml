@@ -1,0 +1,12 @@
+# Named Cloudflare Tunnel "inferencezero" -- fixed hostname, unlike the old
+# Quick Tunnel this replaces. Created with:
+#   cloudflared tunnel create inferencezero
+#   cloudflared tunnel route dns inferencezero app.inferencezero.com
+# Credentials file lives alongside this one (gitignored -- see .gitignore).
+tunnel: ff8d9fad-c6f2-45ed-8908-5a11daf76cb0
+credentials-file: /etc/cloudflared/ff8d9fad-c6f2-45ed-8908-5a11daf76cb0.json
+
+ingress:
+  - hostname: app.inferencezero.com
+    service: http://frontend:4173
+  - service: http_status:404

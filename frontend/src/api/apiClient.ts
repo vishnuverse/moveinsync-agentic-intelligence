@@ -5,6 +5,9 @@ import type {
   ChatMessage,
   ChatRequest,
   ChatResponse,
+  ChatThread,
+  ChatThreadCreateRequest,
+  ChatThreadRenameRequest,
   MetricCardData,
   NotificationItem,
   PersonaId,
@@ -13,6 +16,7 @@ import type {
   ResumeDecisionRequest,
   ResumeDecisionResponse,
   Role,
+  ScopeOption,
   TraceStep,
   VendorScorecardData,
 } from "./types";
@@ -25,8 +29,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    throw new Error(`API request failed: ${init?.method ?? "GET"} ${path} (${res.status})`);
+    // Surface the backend's own error detail (e.g. the message-length/empty
+    // guardrail's 422, or the 502/503 "couldn't get a response" chat errors)
+    // when the body is JSON with one, instead of only a generic status code
+    // -- callers (ChatPanel's error state) show this text directly.
+    let detail: string | undefined;
+    try {
+      const body = await res.clone().json();
+      detail = typeof body?.detail === "string" ? body.detail : undefined;
+    } catch {
+      // response wasn't JSON -- fall through to the generic message below
+    }
+    throw new Error(detail ?? `API request failed: ${init?.method ?? "GET"} ${path} (${res.status})`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -61,8 +77,34 @@ export const realClient: ApiClient = {
     return request<ReportMeta[]>(`/reports?persona=${persona}`);
   },
 
-  getChatHistory(persona: PersonaId): Promise<ChatMessage[]> {
-    return request<ChatMessage[]>(`/chat/history?persona=${persona}`);
+  getChatThreads(persona: PersonaId): Promise<ChatThread[]> {
+    return request<ChatThread[]>(`/chat/threads?persona=${persona}`);
+  },
+
+  createChatThread(body: ChatThreadCreateRequest): Promise<ChatThread> {
+    return request<ChatThread>("/chat/threads", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  renameChatThread(id: string, body: ChatThreadRenameRequest): Promise<ChatThread> {
+    return request<ChatThread>(`/chat/threads/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  },
+
+  deleteChatThread(id: string): Promise<void> {
+    return request<void>(`/chat/threads/${id}`, { method: "DELETE" });
+  },
+
+  getThreadMessages(threadId: string): Promise<ChatMessage[]> {
+    return request<ChatMessage[]>(`/chat/threads/${threadId}/messages`);
+  },
+
+  getScopeOptions(persona: PersonaId): Promise<ScopeOption[]> {
+    return request<ScopeOption[]>(`/chat/scope-options?persona=${persona}`);
   },
 
   postChat(body: ChatRequest): Promise<ChatResponse> {
@@ -76,31 +118,31 @@ export const realClient: ApiClient = {
     return request<ActivityEntry[]>("/activity");
   },
 
-  getOtaTrend(): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>("/charts/ota-trend");
+  getOtaTrend(days?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/ota-trend${days ? `?days=${days}` : ""}`);
   },
 
-  getDelayReasons(): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>("/charts/delay-reasons");
+  getDelayReasons(days?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/delay-reasons${days ? `?days=${days}` : ""}`);
   },
 
-  getNoShowTrend(): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>("/charts/no-show-trend");
+  getNoShowTrend(days?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/no-show-trend${days ? `?days=${days}` : ""}`);
   },
 
-  getAbsenceSplit(): Promise<PieChartData> {
-    return request<PieChartData>("/charts/absence-split");
+  getAbsenceSplit(days?: number): Promise<PieChartData> {
+    return request<PieChartData>(`/charts/absence-split${days ? `?days=${days}` : ""}`);
   },
 
-  getBillingDiscrepancy(): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>("/charts/billing-discrepancy");
+  getBillingDiscrepancy(months?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/billing-discrepancy${months ? `?months=${months}` : ""}`);
   },
 
-  getEmissionsByFuel(): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>("/charts/emissions-by-fuel");
+  getEmissionsByFuel(days?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/emissions-by-fuel${days ? `?days=${days}` : ""}`);
   },
 
-  getVendorScorecard(): Promise<VendorScorecardData> {
-    return request<VendorScorecardData>("/charts/vendor-scorecard");
+  getVendorScorecard(days?: number): Promise<VendorScorecardData> {
+    return request<VendorScorecardData>(`/charts/vendor-scorecard${days ? `?days=${days}` : ""}`);
   },
 };

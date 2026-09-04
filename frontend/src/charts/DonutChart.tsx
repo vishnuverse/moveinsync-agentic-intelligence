@@ -1,6 +1,8 @@
 import Highcharts from "highcharts";
 import type { PieChartData } from "../api";
 import { baseChartOptions, chartColors } from "./chartTheme";
+import { isPieEmpty } from "./chartHelpers";
+import { ChartEmptyState } from "./ChartPanel";
 import HighchartsReact from "./HighchartsReactCompat";
 import "./charts.css";
 
@@ -10,6 +12,8 @@ interface DonutChartProps {
 }
 
 export function DonutChart({ data, height = 260 }: DonutChartProps) {
+  if (isPieEmpty(data)) return <ChartEmptyState />;
+
   const c = chartColors();
   const palette = [c.primary, c.secondary, c.warning, c.critical, c.textMuted];
   const series = data.series[0];
@@ -24,7 +28,17 @@ export function DonutChart({ data, height = 260 }: DonutChartProps) {
         borderColor: c.surface,
         dataLabels: {
           enabled: true,
-          format: "{point.name}: {point.percentage:.0f}%",
+          // A zero-value slice has no arc for its leader line to anchor
+          // to -- Highcharts still tries to place a "0%" label, which reads
+          // as orphaned/floating (found live on the No-Show Cause Split
+          // panel). A formatter lets zero slices opt out of a label
+          // entirely instead of the fixed `format` string rendering one
+          // for every slice regardless of value.
+          formatter(this: Highcharts.Point) {
+            if (!this.y) return null;
+            const pct = (this as unknown as { percentage?: number }).percentage ?? 0;
+            return `${this.name}: ${Highcharts.numberFormat(pct, 0)}%`;
+          },
           style: { color: c.text, fontSize: "11px", textOutline: "none" },
         },
       },

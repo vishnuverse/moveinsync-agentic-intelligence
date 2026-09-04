@@ -75,6 +75,28 @@ def recall_episodes(
     return episodes[:limit]
 
 
+def forget_thread(persona_id: str, thread_id: str) -> int:
+    """Deletes every episodic memory item for one chat thread (DELETE
+    /api/chat/threads/{id}) so a deleted thread's history can never leak into
+    a later thread's context. BaseStore has no bulk-namespace delete
+    primitive, only delete(namespace, key) for one item at a time (confirmed
+    against the installed langgraph-checkpoint-postgres, same way store.py's
+    own docstring confirms its API directly rather than assuming) -- so this
+    lists the namespace's keys via search() first, then deletes each.
+
+    `thread_id` is passed as the namespace's `user_id` slot here, not the
+    persona -- see app/api/chat.py's module docstring for why the chat
+    feature repurposes that slot to mean "this one conversation" instead of
+    "this one persona", which is exactly what makes per-thread isolation (and
+    therefore per-thread deletion) possible in the first place."""
+    namespace = memory_namespace(persona_id, thread_id, "episodic")
+    store = get_memory_store()
+    items = store.search(namespace, limit=1000)
+    for item in items:
+        store.delete(namespace, item.key)
+    return len(items)
+
+
 def summarize_episode_with_llm(messages: list[dict[str, Any]], *, provider: str | None = None) -> str:
     """Optional: turn a message history into remember_episode()'s summary text
     via LangMem's create_thread_extractor, run against this repo's own
