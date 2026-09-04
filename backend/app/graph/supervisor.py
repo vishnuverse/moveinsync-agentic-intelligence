@@ -14,6 +14,18 @@ Two public callables:
         Runs reason->act for one raw NL question, bypassing sense -- the seam
         a future chat endpoint (TM2/LM2/TH4) calls.
 
+    run_report(org_id, persona, report_type="digest", period_label=None) -> dict
+        Generates a period-aggregated HTML report (TM4's daily digest, TH3's
+        leadership report) by invoking the act subgraph directly with
+        action_type="report" -- deliberately NOT routed through run_pipeline's
+        per-signal fan-out, since a digest summarizes a *period* of recent
+        decisions, it isn't a reaction to one specific signal. Called by the
+        scheduler on its own (coarser) cadence (app.schedulers.reports),
+        independent of the interval/event signal-detection paths -- this is
+        what makes TM4/TH3 actually reachable autonomously (flagged as a gap
+        by the FastAPI-integration agent's build report, fixed here rather
+        than left as a follow-up).
+
 Design note on why sense->reason->act is an *orchestrating function* here
 rather than sense also being a node in one single StateGraph (the plan gives
 explicit latitude for either shape): `run_sense()` is a fan-out producer --
@@ -41,10 +53,21 @@ from datetime import datetime
 from typing import Any
 
 from app.checkpointer import get_checkpointer
+from app.graph.act import build_act_subgraph
 from app.graph.sense import Signal, run_sense
+from app.services.notifications_query import list_notifications
 
 from .graph import build_top_graph
 from .state import TopState
+
+# report_type -> which persona's recent notifications feed the digest (plan
+# §1 TM4/TH3). Kept as a small lookup here rather than making the caller pass
+# a persona explicitly for report_type too -- there is exactly one sensible
+# persona per report_type in this project's feature set.
+REPORT_TYPE_PERSONA: dict[str, str] = {
+    "daily_digest": "transport_manager",
+    "leadership_report": "transport_head",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -207,4 +230,68 @@ def run_chat_turn(question: str, persona: str, org_id: str, thread_id: str | Non
         "notification_id": result.get("notification_id"),
         "needs_human_signoff": decision.get("needs_human_signoff", False),
         "paused": "__interrupt__" in result,
+    }
+
+
+def _decision_like(item: dict[str, Any]) -> dict[str, Any]:
+    """Adapts a list_notifications() row (frontend-shaped: severity/title/
+    message/status/...) into act's ReasonDecision shape (act/state.py) for
+    html_report_generator's report_items input -- the notification IS the
+    already-contextualized output of a prior reason pass, so re-deriving a
+    fresh ReasonDecision per item would just re-run reasoning that already
+    happened; this reuses it instead."""
+    return {
+        "summary": item.get("title") or item.get("message", ""),
+        "root_cause": item.get("message", ""),
+        "recommendation": "",
+        "confidence": 1.0,
+        "needs_human_signoff": item.get("status") == "needs_intervention",
+        "target_persona": item.get("persona", ""),
+        "supporting_evidence": {
+            "notification_id": item.get("id"),
+            "severity": item.get("severity"),
+            "scope": item.get("scope"),
+        },
+    }
+
+
+def run_report(
+    org_id: str,
+    persona: str,
+    report_type: str = "digest",
+    period_label: str | None = None,
+) -> dict[str, Any]:
+    """Period-aggregated report generation (plan TM4/TH3) -- invokes the act
+    subgraph directly with action_type="report", bypassing reason (there is
+    no single signal to reason about; the report items are already-reasoned
+    recent notifications for this persona). See module docstring."""
+    checkpointer = get_checkpointer()
+    act_graph = build_act_subgraph(checkpointer=checkpointer)
+
+    recent = list_notifications(org_id, persona, limit=25)
+    report_items = [_decision_like(item) for item in recent]
+
+    label = period_label or datetime.utcnow().strftime("%Y-%m-%d")
+    scope = f"report:{report_type}"
+    thread_id = build_thread_id(persona, scope, label)
+    initial_state = {
+        "org_id": org_id,
+        "persona": persona,
+        "action_type": "report",
+        "scope": scope,
+        "thread_id": thread_id,
+        "report_items": report_items,
+        "period_label": label,
+        "report_type": report_type,
+        "use_llm_narrative": True,
+    }
+    config = {"configurable": {"thread_id": thread_id}}
+    result = act_graph.invoke(initial_state, config=config)
+
+    return {
+        "thread_id": thread_id,
+        "report_id": result.get("report_id"),
+        "report_storage_ref": result.get("report_storage_ref"),
+        "dispatch_status": result.get("dispatch_status"),
+        "item_count": len(report_items),
     }

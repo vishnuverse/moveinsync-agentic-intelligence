@@ -91,6 +91,34 @@ def record_pipeline_summary(
     return len(rows)
 
 
+def record_report_run(
+    org_id: str,
+    persona: str,
+    *,
+    report_type: str,
+    thread_id: str,
+    item_count: int,
+    triggered_by: TriggeredBy = "schedule",
+) -> None:
+    """One row per `app.graph.supervisor.run_report()` call -- the periodic
+    TM4/TH3 digest path, not per-signal like record_pipeline_summary above,
+    so it's a single insert rather than a batch."""
+    action = f"Generated {report_type.replace('_', ' ')} covering {item_count} recent item(s)."
+    contract = get_contract().entity("pipeline_run")
+    table = contract.table
+    c = contract.column
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"INSERT INTO {table} ({c('org_id')}, {c('persona')}, {c('action')}, "
+                f"{c('thread_id')}, {c('triggered_by')}) "
+                f"VALUES (:org_id, :persona, :action, :thread_id, :triggered_by)"
+            ),
+            {"org_id": org_id, "persona": persona, "action": action, "thread_id": thread_id, "triggered_by": triggered_by},
+        )
+
+
 def list_activity(org_id: str | None = None, *, limit: int = 100) -> list[dict[str, Any]]:
     """Most-recent-first pipeline_runs rows, optionally scoped to one org_id.
     Not persona-filtered -- callers (the /activity route) filter client-side
