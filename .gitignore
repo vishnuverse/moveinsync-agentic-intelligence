@@ -16,6 +16,9 @@ backend/.env
 # Raw real dataset (~550MB CSVs) -- never commit, see data/Dictionary/README.md
 /data/
 
+# Cloudflare Tunnel credentials -- the tunnel's private key, never commit
+cloudflared/*.json
+
 # Claude Code worktree scratch space
 .claude/worktrees/
 

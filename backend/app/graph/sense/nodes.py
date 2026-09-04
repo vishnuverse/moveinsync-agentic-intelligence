@@ -38,6 +38,17 @@ DEFAULT_DELAY_BREACH_MINUTES = 15.0
 DEFAULT_ICE_BASELINE_GCO2_PER_PAX_KM = 82.0
 DEFAULT_COST_DIVERGENCE_PCT = 0.20
 DEFAULT_MIN_LATE_SAMPLES = 3
+# BUGFIX (found live: a single sense pass against the real ~26K-employee
+# dataset produced 418 attendance_unrelated_late signals in one run -- unlike
+# detect_escort_compliance_signal below, this detector had no cap at all, so
+# every one of those 418 signals fanned out into its own full reason->act LLM
+# round-trip, blew through LLM_DAILY_CALL_LIMIT partway through, and every
+# signal after that failed closed with LLMBudgetExhaustedError -- which is
+# why the demo looked like "no agentic intelligence" after the first
+# scheduler tick: the very first real run exhausted its own budget. Same
+# per-pass cap pattern as DEFAULT_ESCORT_VIOLATION_SIGNAL_LIMIT below,
+# applied to both directions this detector emits.
+DEFAULT_ATTENDANCE_SIGNAL_LIMIT = 25
 DEFAULT_TRANSPORT_CORRELATION_RATIO = 0.6
 DEFAULT_UNRELATED_CORRELATION_RATIO = 0.15
 
@@ -521,6 +532,7 @@ def detect_attendance_correlation(
     since: datetime | None = None,
     delay_threshold_minutes: float = DEFAULT_DELAY_BREACH_MINUTES,
     min_late_samples: int = DEFAULT_MIN_LATE_SAMPLES,
+    signal_limit: int = DEFAULT_ATTENDANCE_SIGNAL_LIMIT,
 ) -> list[Signal]:
     """Joins attendance to commute (via trip) to classify each employee's late
     marks as transport-caused vs. unrelated, and flags both directions:
@@ -528,6 +540,10 @@ def detect_attendance_correlation(
       be held against them, it's a shuttle problem.
     - late marks with ~zero transport correlation -> a genuine attendance
       pattern worth a manager's attention, not a transport issue.
+
+    Each direction is independently capped at `signal_limit` (worst/highest
+    late_count first) -- see DEFAULT_ATTENDANCE_SIGNAL_LIMIT's own comment for
+    why this matters at real-dataset scale.
     """
 
     contract = get_contract()
@@ -575,57 +591,74 @@ def detect_attendance_correlation(
         },
     ).mappings().all()
 
-    signals: list[Signal] = []
+    correlated_candidates: list[Any] = []
+    unrelated_candidates: list[Any] = []
     for row in rows:
         late_count = row["late_count"]
         transport_count = row["transport_caused_count"] or 0
         ratio = transport_count / late_count if late_count else 0.0
-
         if ratio >= DEFAULT_TRANSPORT_CORRELATION_RATIO:
-            signals.append(
-                Signal(
-                    signal_type="attendance_correlated_with_transport",
-                    entity_type="employee",
-                    entity_id=str(row["employee_id"]),
-                    severity="high" if ratio >= 0.85 else "medium",
-                    summary=(
-                        f"{row['employee_name']} was late {late_count} time(s) since {since.date()}; "
-                        f"{transport_count} ({ratio * 100:.0f}%) coincide with shuttle delays over "
-                        f"{delay_threshold_minutes:.0f} min -- likely not an attendance issue."
-                    ),
-                    raw_metric={
-                        "late_count": late_count,
-                        "transport_caused_count": transport_count,
-                        "correlation_ratio": round(ratio, 3),
-                    },
-                    org_id=org_id,
-                    detected_at=_utcnow(),
-                    source="detect_attendance_correlation",
-                    context={"team_id": row["team_id"], "employee_name": row["employee_name"]},
-                )
-            )
+            correlated_candidates.append((row, ratio))
         elif ratio <= DEFAULT_UNRELATED_CORRELATION_RATIO:
-            signals.append(
-                Signal(
-                    signal_type="attendance_unrelated_late",
-                    entity_type="employee",
-                    entity_id=str(row["employee_id"]),
-                    severity="low" if late_count < min_late_samples * 2 else "medium",
-                    summary=(
-                        f"{row['employee_name']} was late {late_count} time(s) since {since.date()} "
-                        f"with no meaningful correlation to shuttle delays -- likely unrelated to transport."
-                    ),
-                    raw_metric={
-                        "late_count": late_count,
-                        "transport_caused_count": transport_count,
-                        "correlation_ratio": round(ratio, 3),
-                    },
-                    org_id=org_id,
-                    detected_at=_utcnow(),
-                    source="detect_attendance_correlation",
-                    context={"team_id": row["team_id"], "employee_name": row["employee_name"]},
-                )
+            unrelated_candidates.append((row, ratio))
+
+    # Cap each direction independently (worst/highest late_count first) --
+    # see signal_limit's docstring note and DEFAULT_ATTENDANCE_SIGNAL_LIMIT.
+    correlated_candidates.sort(key=lambda pair: pair[0]["late_count"], reverse=True)
+    unrelated_candidates.sort(key=lambda pair: pair[0]["late_count"], reverse=True)
+    correlated_candidates = correlated_candidates[:signal_limit]
+    unrelated_candidates = unrelated_candidates[:signal_limit]
+
+    signals: list[Signal] = []
+    for row, ratio in correlated_candidates:
+        late_count = row["late_count"]
+        transport_count = row["transport_caused_count"] or 0
+        signals.append(
+            Signal(
+                signal_type="attendance_correlated_with_transport",
+                entity_type="employee",
+                entity_id=str(row["employee_id"]),
+                severity="high" if ratio >= 0.85 else "medium",
+                summary=(
+                    f"{row['employee_name']} was late {late_count} time(s) since {since.date()}; "
+                    f"{transport_count} ({ratio * 100:.0f}%) coincide with shuttle delays over "
+                    f"{delay_threshold_minutes:.0f} min -- likely not an attendance issue."
+                ),
+                raw_metric={
+                    "late_count": late_count,
+                    "transport_caused_count": transport_count,
+                    "correlation_ratio": round(ratio, 3),
+                },
+                org_id=org_id,
+                detected_at=_utcnow(),
+                source="detect_attendance_correlation",
+                context={"team_id": row["team_id"], "employee_name": row["employee_name"]},
             )
+        )
+    for row, ratio in unrelated_candidates:
+        late_count = row["late_count"]
+        transport_count = row["transport_caused_count"] or 0
+        signals.append(
+            Signal(
+                signal_type="attendance_unrelated_late",
+                entity_type="employee",
+                entity_id=str(row["employee_id"]),
+                severity="low" if late_count < min_late_samples * 2 else "medium",
+                summary=(
+                    f"{row['employee_name']} was late {late_count} time(s) since {since.date()} "
+                    f"with no meaningful correlation to shuttle delays -- likely unrelated to transport."
+                ),
+                raw_metric={
+                    "late_count": late_count,
+                    "transport_caused_count": transport_count,
+                    "correlation_ratio": round(ratio, 3),
+                },
+                org_id=org_id,
+                detected_at=_utcnow(),
+                source="detect_attendance_correlation",
+                context={"team_id": row["team_id"], "employee_name": row["employee_name"]},
+            )
+        )
     return signals
 
 

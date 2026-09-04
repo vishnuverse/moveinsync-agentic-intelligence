@@ -53,11 +53,31 @@ _SHORT_LABELS: dict[str, str] = {
 
 
 def _ensure_seeded(org_id: str) -> None:
+    """BUGFIX (found live against the real dataset): this used to call
+    `run_pipeline(org_id)` synchronously, inline in the GET /api/dashboard
+    request handler. Against the synthetic seed (small, fast) that's a
+    sub-second no-op; against the real dataset (hundreds of real signals,
+    each a real LLM call over the network) it blocks the request for many
+    minutes -- long past Caddy's proxy timeout, surfacing as a 502 to the
+    browser -- AND, since the scheduler's own first tick already fires
+    immediately on container start (see app/schedulers/interval.py), a page
+    load landing while that tick is still running would kick off a SECOND,
+    fully redundant full pipeline sweep concurrently, double-spending real
+    LLM budget on the same signals (the thread_id dedup check in
+    supervisor.run_pipeline is a TOCTOU race across two concurrent sweeps,
+    not a lock).
+
+    Fire-and-forget in a background thread instead: the request returns
+    immediately (empty cards on a genuinely fresh DB, same as before the
+    scheduler's first tick completes -- honest, not a regression), and a
+    lock still guards against launching more than one background seed pass
+    per org per process."""
     if org_id in _SEEDED_ORGS:
         return
     with _SEED_LOCK:
         if org_id in _SEEDED_ORGS:
             return
+        _SEEDED_ORGS.add(org_id)
         contract = get_contract().entity("notification")
         engine = get_engine()
         with engine.begin() as conn:
@@ -68,8 +88,7 @@ def _ensure_seeded(org_id: str) -> None:
         if not count:
             from app.graph.supervisor import run_pipeline
 
-            run_pipeline(org_id)
-        _SEEDED_ORGS.add(org_id)
+            threading.Thread(target=run_pipeline, args=(org_id,), daemon=True).start()
 
 
 def _fetch_thread_values(thread_id: str) -> dict[str, Any]:

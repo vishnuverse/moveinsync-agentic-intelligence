@@ -126,6 +126,29 @@ def mark_notification_status(engine: Engine, *, notification_id: int, status: st
         )
 
 
+def notification_exists_for_thread(engine: Engine, *, org_id: str, thread_id: str) -> bool:
+    """BUGFIX (found live: the scheduler's very first real tick against real
+    data started 471 sequential real LLM calls -- one per detected signal,
+    including dozens of the SAME historical rows the sense layer has no
+    reason not to re-detect every tick, since detectors scan a rolling
+    window/limit rather than tracking "already seen"). `upsert_notification`
+    above is already thread_id-idempotent at the DB-row level, but that
+    idempotency kicks in only AFTER reason's LLM call already ran -- this
+    lets `supervisor.run_pipeline` check BEFORE invoking the reason->act
+    graph at all, so a signal whose thread_id already produced a notification
+    on a prior tick is skipped without burning another LLM call or Sarvam-
+    budget unit reprocessing something already reasoned about once."""
+    contract = get_contract().entity("notification")
+    table = contract.table
+    c = contract.column
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(f"SELECT 1 FROM {table} WHERE {c('org_id')} = :org_id AND {c('thread_id')} = :thread_id LIMIT 1"),
+            {"org_id": org_id, "thread_id": thread_id},
+        ).first()
+        return row is not None
+
+
 def get_notification(engine: Engine, notification_id: int) -> dict[str, Any] | None:
     contract = get_contract().entity("notification")
     table = contract.table

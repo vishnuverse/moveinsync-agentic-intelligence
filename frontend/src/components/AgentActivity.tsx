@@ -18,6 +18,18 @@ function formatTime(ts: string): string {
   });
 }
 
+// Lightweight client-side classification of the backend's free-text `action`
+// sentence -- no schema change needed. Matches activity_log.py's own fixed
+// phrasing ("Couldn't finish reasoning...", "Checked in for..."), so a
+// transient retry-pending entry and an empty scheduled check-in read
+// visually distinct from genuine autonomous findings, instead of all three
+// looking identical in the feed.
+function activityKind(action: string): "retry" | "quiet" | "normal" {
+  if (action.startsWith("Couldn't finish reasoning")) return "retry";
+  if (action.startsWith("Checked in for")) return "quiet";
+  return "normal";
+}
+
 export function AgentActivity() {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,25 +50,29 @@ export function AgentActivity() {
       {loading && <p className="notification-empty">Loading activity…</p>}
       {!loading && (
         <ul className="agent-activity-list">
-          {entries.map((entry) => (
-            <li key={entry.id} className="agent-activity-item">
-              <span
-                className={`agent-activity-trigger agent-activity-trigger-${entry.triggered_by}`}
-              >
-                {entry.triggered_by === "schedule" ? "⏱" : "⚡"}
-              </span>
-              <div className="agent-activity-body">
-                <div className="agent-activity-meta">
-                  <span className="badge badge-neutral">{PERSONA_LABEL[entry.persona]}</span>
-                  <span className="agent-activity-source">
-                    {entry.triggered_by === "schedule" ? "Scheduled run" : "Event-triggered"}
-                  </span>
-                  <span className="notification-item-time">{formatTime(entry.timestamp)}</span>
+          {entries.map((entry) => {
+            const kind = activityKind(entry.action);
+            return (
+              <li key={entry.id} className={`agent-activity-item agent-activity-item-${kind}`}>
+                <span
+                  className={`agent-activity-trigger agent-activity-trigger-${entry.triggered_by}`}
+                >
+                  {entry.triggered_by === "schedule" ? "⏱" : "⚡"}
+                </span>
+                <div className="agent-activity-body">
+                  <div className="agent-activity-meta">
+                    <span className="badge badge-neutral">{PERSONA_LABEL[entry.persona]}</span>
+                    <span className="agent-activity-source">
+                      {entry.triggered_by === "schedule" ? "Scheduled run" : "Event-triggered"}
+                    </span>
+                    <span className="notification-item-time">{formatTime(entry.timestamp)}</span>
+                    {kind === "retry" && <span className="badge badge-warning">Retrying</span>}
+                  </div>
+                  <p className="agent-activity-action">{entry.action}</p>
                 </div>
-                <p className="agent-activity-action">{entry.action}</p>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

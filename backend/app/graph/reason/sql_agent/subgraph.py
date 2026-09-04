@@ -45,10 +45,31 @@ def _normalize_pg_url(database_url: str) -> str:
     return database_url
 
 
+def _active_schema() -> str | None:
+    """BUGFIX (found live: chat/reason answers were grounded against the
+    synthetic public.safety_incidents table even with the real-data contract
+    active) -- SQLDatabase.from_uri() with no `schema=` introspects whatever
+    the connection's default search_path exposes (`public` only), completely
+    independent of data_contract.yaml's `table: mis.trip` mapping used
+    everywhere else in this codebase. Derives the schema the SAME way the
+    contract already does it (the `trip` entity's table name, split on
+    `.`) so the SQL agent stays consistent with every other contract-resolved
+    query without adding a second schema config to keep in sync."""
+    try:
+        from app.contracts import get_contract
+
+        table = get_contract().entity("trip").table
+    except Exception:
+        return None
+    return table.split(".", 1)[0] if "." in table else None
+
+
 @functools.lru_cache(maxsize=8)
 def _build_database(database_url: str, statement_timeout_ms: int) -> SQLDatabase:
+    schema = _active_schema()
     return SQLDatabase.from_uri(
         _normalize_pg_url(database_url),
+        schema=schema,
         sample_rows_in_table_info=3,
         engine_args={
             "connect_args": {"options": f"-c statement_timeout={statement_timeout_ms}"},

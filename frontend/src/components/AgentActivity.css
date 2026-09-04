@@ -21,8 +21,19 @@
   align-items: flex-start;
   background: var(--color-surface);
   border: 1px solid var(--color-border-soft);
+  border-left: 3px solid var(--color-border-soft);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
+}
+
+/* Retrying / empty-checkin entries are real, honest log lines -- not hidden
+   -- but shouldn't visually compete with genuine findings for attention. */
+.agent-activity-item-retry {
+  border-left-color: var(--color-warning, #b8860b);
+}
+
+.agent-activity-item-quiet {
+  opacity: 0.65;
 }
 
 .agent-activity-trigger {

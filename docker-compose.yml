@@ -6,13 +6,14 @@
 # generates synthetic data on first boot, then exits -- `backend`/`scheduler`
 # wait for it via `depends_on: condition: service_completed_successfully`.
 #
-# Public demo URL (Cloudflare Quick Tunnel, no account/domain needed): once
-# the stack is up, run:
-#   docker compose logs cloudflared | grep trycloudflare.com
-# and grab the printed https://<random>.trycloudflare.com URL. It changes on
-# every restart. The tunnel points only at `frontend`, which reverse-proxies
-# /api (and the /api/ws websocket) to `backend` itself (see frontend/Caddyfile)
-# -- one tunnel target reaches the whole app, no second hostname needed.
+# Public demo URL: https://app.inferencezero.com -- a named Cloudflare Tunnel
+# ("inferencezero", routed via `cloudflared tunnel route dns`), fixed across
+# restarts/IP changes, unlike the old Quick Tunnel's random trycloudflare.com
+# URL. Routing lives in cloudflared/config.yml; the credentials JSON sits
+# alongside it (gitignored -- never commit it). The tunnel points only at
+# `frontend`, which reverse-proxies /api (and the /api/ws websocket) to
+# `backend` itself (see frontend/Caddyfile) -- one tunnel target reaches the
+# whole app, no second hostname needed.
 
 services:
   postgres:
@@ -141,10 +142,10 @@ services:
     ports:
       - "5173:4173"
 
-  # Cloudflare Quick Tunnel -- no account, no domain, no token (see the file
-  # header comment for how to get the public URL once this is up). Outbound-
-  # only: no ports published, nothing to open in a firewall. Points only at
-  # `frontend`, which proxies /api itself -- see frontend/Caddyfile.
+  # Named Cloudflare Tunnel "inferencezero" -- see file header comment.
+  # Outbound-only: no ports published, nothing to open in a firewall.
+  # Ingress routing (hostname -> frontend:4173) lives in
+  # cloudflared/config.yml, not on this command line.
   cloudflared:
     image: cloudflare/cloudflared:latest
     # --protocol http2, not the default QUIC/UDP: verified live that QUIC
@@ -152,7 +153,9 @@ services:
     # failure") from inside this container's Docker network -- a known
     # cloudflared-in-Docker rough edge (UDP/QUIC is more sensitive to
     # container networking than plain HTTP/2 over TCP).
-    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://frontend:4173"]
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "run"]
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
     depends_on:
       - frontend
     restart: unless-stopped

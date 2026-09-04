@@ -26,25 +26,47 @@ TriggeredBy = Literal["schedule", "event"]
 _VALID_PERSONAS = ("transport_manager", "line_manager", "transport_head")
 
 
+_SIGNAL_TYPE_LABELS: dict[str, str] = {
+    "delay_breach": "a route delay",
+    "incident": "a safety incident",
+    "cost_divergence": "a cost divergence",
+    "emissions_over_target": "an emissions-over-target reading",
+    "attendance_correlated_with_transport": "a transport-linked attendance pattern",
+    "attendance_unrelated_late": "an attendance pattern unrelated to transport",
+    "escort_compliance_violation": "an escort-compliance issue",
+    "billing_discrepancy": "a billing discrepancy",
+}
+
+
 def _describe(entry: dict[str, Any]) -> str | None:
     """Builds a human-readable action sentence from one run_pipeline() summary
     entry (see supervisor.py's docstring for the exact shape). Returns None
-    for entries with no persona to attribute the row to (logged_only
-    data-quality entries) -- those aren't representable as an ActivityEntry.
+    for entries not worth surfacing in the feed: logged_only data-quality
+    entries (no persona to attribute the row to), and -- BUGFIX (found live:
+    the dedup fix in supervisor.run_pipeline emits an "skipped_already_
+    processed" entry per already-seen signal every tick, e.g. dozens of them
+    once real historical data is loaded; these aren't autonomous ACTIONS,
+    they're explicitly the absence of one, and would drown out genuine
+    activity in the feed) -- also filtered here rather than displayed.
     """
     persona = entry.get("persona")
     if persona not in _VALID_PERSONAS:
         return None
+    if entry.get("action") == "skipped_already_processed":
+        return None
+
+    signal_label = _SIGNAL_TYPE_LABELS.get(entry.get("signal_type", ""), "a signal")
 
     if entry.get("action") == "error":
-        return (
-            f"Pipeline run failed while processing a {entry.get('signal_type', 'signal')} "
-            f"signal (thread {entry.get('thread_id', 'unknown')})."
-        )
+        # BUGFIX (found live): this used to surface the raw thread_id string
+        # ("thread line_manager:team:502:attendance_unrelated_late-1900") --
+        # meaningless to a viewer of the feed, and it read as a permanent
+        # failure even though a transient one (e.g. a since-fixed config
+        # issue) resolves on the next tick without anyone doing anything.
+        return f"Couldn't finish reasoning about {signal_label} this cycle -- will retry automatically next cycle."
 
-    signal_type = entry.get("signal_type", "signal")
     summary = entry.get("decision_summary")
-    base = summary or f"Processed a {signal_type} signal for {entry.get('scope', 'this scope')}."
+    base = summary or f"Processed {signal_label} for {entry.get('scope', 'this scope')}."
     if entry.get("needs_human_signoff"):
         return f"{base} Drafted and held for sign-off."
     return base
@@ -103,7 +125,17 @@ def record_report_run(
     """One row per `app.graph.supervisor.run_report()` call -- the periodic
     TM4/TH3 digest path, not per-signal like record_pipeline_summary above,
     so it's a single insert rather than a batch."""
-    action = f"Generated {report_type.replace('_', ' ')} covering {item_count} recent item(s)."
+    report_label = {"daily_digest": "the daily digest", "monthly_leadership": "the monthly leadership report"}.get(
+        report_type, report_type.replace("_", " ")
+    )
+    # BUGFIX (found live): "Generated daily digest covering 0 recent item(s)"
+    # read as if something meaningful happened when nothing did -- phrased
+    # separately for the empty case rather than a generic template that
+    # doesn't distinguish "reported real activity" from "nothing to report".
+    if item_count:
+        action = f"Generated {report_label}, covering {item_count} recent item{'s' if item_count != 1 else ''}."
+    else:
+        action = f"Checked in for {report_label} -- nothing new to report since the last cycle."
     contract = get_contract().entity("pipeline_run")
     table = contract.table
     c = contract.column

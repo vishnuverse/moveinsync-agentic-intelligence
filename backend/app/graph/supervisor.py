@@ -54,6 +54,8 @@ from typing import Any
 
 from app.checkpointer import get_checkpointer
 from app.graph.act import build_act_subgraph
+from app.graph.act.db import get_engine as get_act_engine
+from app.graph.act.db import notification_exists_for_thread
 from app.graph.sense import Signal, run_sense
 from app.services.notifications_query import list_notifications
 
@@ -140,6 +142,11 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
     acted on, including whether the run paused for human sign-off."""
     checkpointer = get_checkpointer()
     top_graph = build_top_graph(checkpointer)
+    # get_act_engine() (app.graph.act.db.get_engine) creates a brand-new
+    # SQLAlchemy Engine/connection-pool per call -- built once here, not
+    # inside the per-signal loop below (up to hundreds of iterations against
+    # real data), to avoid spinning up hundreds of throwaway pools per tick.
+    act_engine = get_act_engine()
 
     sense_result = run_sense(org_id=org_id, since=since, event=event)
     signals: list[Signal] = sense_result.get("signals", [])
@@ -162,6 +169,27 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
 
         for persona in personas_for_signal(signal):
             thread_id = build_thread_id(persona, scope, ref)
+
+            # See app.graph.act.db.notification_exists_for_thread's own
+            # docstring for the incident this guards against: without it,
+            # every tick re-reasons (real LLM call) about every signal a
+            # detector's rolling window still returns, including ones
+            # already notified on a prior tick -- verified live this is the
+            # common case (a signal's underlying row doesn't disappear from
+            # the window just because it was already handled).
+            if notification_exists_for_thread(act_engine, org_id=org_id, thread_id=thread_id):
+                summary.append(
+                    {
+                        "signal_type": signal.signal_type,
+                        "entity_type": signal.entity_type,
+                        "entity_id": signal.entity_id,
+                        "persona": persona,
+                        "thread_id": thread_id,
+                        "action": "skipped_already_processed",
+                    }
+                )
+                continue
+
             initial_state: TopState = {
                 "org_id": org_id,
                 "persona": persona,
