@@ -1,38 +1,23 @@
-# Data Contract Layer (plan §3) -- REAL-DATA CONTRACT
+# Data Contract Layer (plan §3)
 #
 # Maps logical entity/column names -- the only names sense/reason/act nodes,
-# dashboard queries, and metric calculations are allowed to reference -- to
-# the physical table/column names of whatever Postgres schema is actually
-# attached. This is now the DEFAULT file loader.py reads.
+# dashboard queries, and metric calculations are allowed to reference -- to the
+# physical table/column names of whatever Postgres schema is actually attached.
 #
-# This file points at the `mis` schema (backend/db/real_data/mis_schema.sql),
-# populated from the real MoveInSync dataset in data/*.csv by
-# backend/db/real_data/ingest.py -- see backend/db/real_data/README.md for
-# the full pipeline and backend/db/real_data/mis_schema.sql for exactly how
-# each table was derived (what's real vs. synthesized -- team/line-manager
-# hierarchy, the driver dimension, and emission factors are all clearly
-# flagged there).
+# This file IS the default/reference contract shipped with the repo. It points
+# at the schema defined in backend/db/schema.sql and populated by
+# backend/db/seed/generate.py. When real MoveInSync data lands, point Postgres
+# at it, edit this file to the real table/column names, and nothing else in
+# the codebase should need to change (see plan §3's decoupling proof test).
 #
-# Every logical entity/column KEY here is identical to
-# backend/config/data_contract.synthetic.yaml (the preserved fallback this
-# file replaced as the default) -- only the physical table/column targets
-# changed, plus one new entity (`feedback`) that is purely additive. Nothing
-# in backend/app/graph/{sense,reason,act}/ needed to change. `notification`
-# and `report` are act-layer output tables (backend/app/graph/act/), not raw
-# business data, and are unaffected by the real-data migration -- they stay
-# on `public.agent_notifications` / `public.agent_reports`.
-#
-# To go back to the synthetic seed data at any time:
-#   DATA_CONTRACT_PATH=backend/config/data_contract.synthetic.yaml <run backend>
-# (backend/app/contracts/loader.py already reads this env var; see its
-# _CONTRACT_PATH_ENV_VAR / _DEFAULT_CONTRACT_PATH.)
+# Loaded by backend/app/contracts/loader.py via contract.entity("trip").column("scheduled_time").
 
-version: 2
-default_org_id: vanta-Aus  # one of the 5 real business units (see below); used only as a fallback scope when no org is specified
+version: 1
+default_org_id: moveinsync-demo
 
 entities:
   trip:
-    table: mis.trip
+    table: route_trips
     columns:
       id: id
       org_id: org_id
@@ -48,7 +33,7 @@ entities:
       created_at: created_at
 
   cost:
-    table: mis.cost
+    table: route_costs
     columns:
       id: id
       org_id: org_id
@@ -64,7 +49,7 @@ entities:
       created_at: created_at
 
   incident:
-    table: mis.incident
+    table: safety_incidents
     columns:
       id: id
       org_id: org_id
@@ -80,7 +65,7 @@ entities:
       created_at: created_at
 
   emission:
-    table: mis.emission
+    table: emissions_log
     columns:
       id: id
       org_id: org_id
@@ -95,7 +80,7 @@ entities:
       created_at: created_at
 
   commute:
-    table: mis.commute
+    table: commute_logs
     columns:
       id: id
       org_id: org_id
@@ -110,7 +95,7 @@ entities:
       created_at: created_at
 
   attendance:
-    table: mis.attendance
+    table: attendance_records
     columns:
       id: id
       org_id: org_id
@@ -123,7 +108,7 @@ entities:
       created_at: created_at
 
   vendor:
-    table: mis.vendor
+    table: vendors
     columns:
       id: id
       org_id: org_id
@@ -137,7 +122,7 @@ entities:
       created_at: created_at
 
   employee:
-    table: mis.employee
+    table: employees
     columns:
       id: id
       org_id: org_id
@@ -152,7 +137,7 @@ entities:
       created_at: created_at
 
   route:
-    table: mis.route
+    table: routes
     columns:
       id: id
       org_id: org_id
@@ -168,7 +153,7 @@ entities:
       created_at: created_at
 
   team:
-    table: mis.team
+    table: teams
     columns:
       id: id
       org_id: org_id
@@ -178,7 +163,7 @@ entities:
       created_at: created_at
 
   driver:
-    table: mis.driver
+    table: drivers
     columns:
       id: id
       org_id: org_id
@@ -190,8 +175,9 @@ entities:
       status: status
       created_at: created_at
 
-  # act-layer outputs (backend/app/graph/act/) -- unaffected by the real-data
-  # migration, unchanged from data_contract.synthetic.yaml.
+  # act-layer outputs (backend/app/graph/act/) -- the UI notification inbox
+  # and report library both read through these two entities. Added by the
+  # act subgraph build; kept in lockstep with backend/db/schema.sql.
   notification:
     table: agent_notifications
     columns:
@@ -225,30 +211,6 @@ entities:
       generated_at: generated_at
       created_at: created_at
 
-  # NEW entity -- not part of the original synthetic contract. Additive only:
-  # route/driver/cab/safety/marshal ratings from trip_feedback.csv, doesn't
-  # change the shape of any existing entity above.
-  feedback:
-    table: mis.feedback
-    columns:
-      id: id
-      org_id: org_id
-      trip_id: trip_id
-      employee_id: employee_id
-      trip_type: trip_type
-      trip_date: trip_date
-      route_rating: route_rating
-      driver_rating: driver_rating
-      cab_rating: cab_rating
-      safety_rating: safety_rating
-      marshal_rating: marshal_rating
-      creation_time: creation_time
-      created_at: created_at
-
-  # Infra/reference entities (not part of the real-vs-synthetic operational
-  # data swap -- these always live in the app's own `public` schema
-  # regardless of which data_contract is active). Carried over during the
-  # real-data-ingestion merge, which branched before these existed.
   benchmark:
     table: sustainability_targets
     columns:
