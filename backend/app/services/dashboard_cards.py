@@ -185,6 +185,8 @@ def _card_from_notification(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_dashboard(org_id: str, persona: str, *, limit: int = 5) -> list[dict[str, Any]]:
+    # list_notifications() already excludes chat-originated rows (scope="chat")
+    # -- see its own docstring for the incident this guards against.
     _ensure_seeded(org_id)
     rows = list_notifications(org_id, persona, limit=limit)
     return [_card_from_notification(row) for row in rows]

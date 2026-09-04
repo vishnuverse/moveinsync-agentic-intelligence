@@ -30,6 +30,20 @@ def to_frontend_status(db_status: str) -> str:
 
 
 def list_notifications(org_id: str, persona: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    """BUGFIX (found live: chat Q&A answers -- "which vendor has the fewest
+    incidents", "no trips found this week" -- were showing up as permanent
+    entries in the Notification Inbox and, via dashboard_cards.py, as
+    dashboard KPI cards, crowding out real autonomous findings). Root cause:
+    `bridge_to_act` (app/graph/graph.py) has no `signal` to inspect for a
+    run_chat_turn() call (chat bypasses sense entirely), so every chat turn
+    falls through to the default action_type="notification" and gets a
+    permanent row here, the same table real signal-driven alerts use.
+    `app.graph.supervisor.run_chat_turn` sets scope="chat" explicitly, and no
+    real signal-driven scope is ever literally that string (they're always
+    entity-derived, e.g. "route:RT-001") -- the cheapest available way to
+    exclude chat noise from every reader of this table (this function backs
+    both the dashboard and the inbox, plus run_report()'s digest content) in
+    one place, without a schema change or touching the graph itself."""
     contract = get_contract().entity("notification")
     table = contract.table
     c = contract.column
@@ -41,6 +55,7 @@ def list_notifications(org_id: str, persona: str, *, limit: int = 50) -> list[di
                 f"{c('message')} AS message, {c('status')} AS status, {c('thread_id')} AS thread_id, "
                 f"{c('scope')} AS scope, {c('created_at')} AS created_at "
                 f"FROM {table} WHERE {c('org_id')} = :org_id AND {c('persona')} = :persona "
+                f"AND {c('scope')} != 'chat' "
                 f"ORDER BY {c('created_at')} DESC LIMIT :limit"
             ),
             {"org_id": org_id, "persona": persona, "limit": limit},
