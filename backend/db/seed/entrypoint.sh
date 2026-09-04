@@ -38,4 +38,28 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/api_schema.sql
 echo "seed: generating synthetic data"
 python db/seed/generate.py
 
+# Real-data ingestion (backend/config/data_contract.yaml, the active
+# default, points at mis.* -- see backend/db/real_data/README.md). Only
+# runs when the real CSVs are actually present (DATA_DIR, mounted from the
+# host's gitignored data/ folder -- see docker-compose.yml) since that
+# ~550MB dataset isn't part of the image/repo and a fresh clone without it
+# should still boot cleanly on synthetic data alone (data_contract.yaml
+# would then point at empty mis.* tables -- flip DATA_CONTRACT_PATH to
+# data_contract.synthetic.yaml in that case, per this seed job's own
+# skip-message below).
+if [ -n "${DATA_DIR:-}" ] && [ -f "${DATA_DIR}/emp_Data.csv" ]; then
+    echo "seed: real data found at $DATA_DIR, running real-data ingestion"
+    python db/real_data/ingest.py
+
+    echo "seed: applying escort-compliance/ack-time migration (post-ingest, mis.* was just rebuilt)"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/001_add_escort_and_ack_time.sql
+
+    echo "seed: applying mis.* NOTIFY triggers (post-ingest, mis.* was just rebuilt)"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/real_data/triggers.sql
+else
+    echo "seed: no real data at DATA_DIR=${DATA_DIR:-<unset>} -- skipping real-data ingestion." \
+         "backend/config/data_contract.yaml still points at mis.* (now empty)." \
+         "Set DATA_CONTRACT_PATH=backend/config/data_contract.synthetic.yaml on backend/scheduler to run on synthetic data instead."
+fi
+
 echo "seed: done"

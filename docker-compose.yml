@@ -50,6 +50,12 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
+      # Read-only mount of the real dataset (gitignored, host-only -- see
+      # data/Dictionary/README.md). entrypoint.sh skips real-data ingestion
+      # gracefully if this path/CSVs aren't present.
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data:ro
     entrypoint: ["sh", "db/seed/entrypoint.sh"]
 
   backend:
@@ -63,11 +69,20 @@ services:
         condition: service_healthy
       seed:
         condition: service_completed_successfully
+    # BUGFIX (found live: every LLM call failed with "SARVAM_API_KEY is not
+    # set" once real signals started reaching reason/act) -- `environment:`
+    # entries like `${SARVAM_API_KEY:-}` below substitute from the HOST
+    # shell's env, not from backend/.env (Compose only auto-loads a root-level
+    # .env, never a subdirectory one) -- so the key silently resolved to
+    # empty every time. env_file here loads backend/.env's real values first;
+    # SARVAM_API_KEY/OPENROUTER_API_KEY are deliberately NOT also listed under
+    # `environment:` below, since an explicit `environment:` entry overrides
+    # env_file for the same key, which would just reintroduce this bug.
+    env_file:
+      - backend/.env
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-sarvam}
       LLM_MODEL: ${LLM_MODEL:-sarvam-105b-conversations}
-      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       LLM_DAILY_CALL_LIMIT: ${LLM_DAILY_CALL_LIMIT:-500}
       DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
       REDIS_URL: redis://redis:6379/0
@@ -96,11 +111,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    # See `backend`'s env_file comment above -- same bug, same fix.
+    env_file:
+      - backend/.env
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-sarvam}
       LLM_MODEL: ${LLM_MODEL:-sarvam-105b-conversations}
-      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       LLM_DAILY_CALL_LIMIT: ${LLM_DAILY_CALL_LIMIT:-500}
       DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
       REDIS_URL: redis://redis:6379/0

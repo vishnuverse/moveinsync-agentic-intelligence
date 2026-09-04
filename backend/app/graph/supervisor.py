@@ -63,10 +63,14 @@ from .state import TopState
 # report_type -> which persona's recent notifications feed the digest (plan
 # §1 TM4/TH3). Kept as a small lookup here rather than making the caller pass
 # a persona explicitly for report_type too -- there is exactly one sensible
-# persona per report_type in this project's feature set.
+# persona per report_type in this project's feature set. Values must match
+# agent_reports.report_type's CHECK constraint (backend/db/schema.sql) --
+# BUGFIX (found live: the scheduler's first real report_tick threw
+# IntegrityError, "leadership_report" isn't in that constraint's allowed
+# list) -- "monthly_leadership" is.
 REPORT_TYPE_PERSONA: dict[str, str] = {
     "daily_digest": "transport_manager",
-    "leadership_report": "transport_head",
+    "monthly_leadership": "transport_head",
 }
 
 logger = logging.getLogger(__name__)

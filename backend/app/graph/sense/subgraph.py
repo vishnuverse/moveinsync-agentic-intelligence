@@ -14,16 +14,12 @@ other node/subgraph in the top-level graph.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import Engine
 
 from app.graph.sense import nodes as detectors
 from app.graph.sense.db import get_engine
 from app.graph.sense.state import SenseState
-
-DEFAULT_ENTRY_LOOKBACK = timedelta(hours=24)
 
 _DETECTOR_NAMES = (
     "detect_delay_signal",
@@ -38,13 +34,23 @@ _DETECTOR_NAMES = (
 
 
 def poll_or_event_entry(state: SenseState) -> dict:
-    """Fills in `since` when the caller didn't pass one (scheduler ticks
-    normally do; an event-driven invocation from the listener may only pass
-    `event` and rely on this default). Does not otherwise branch on `event`
-    today -- every detector re-scans its own window regardless of which
-    table's row triggered the run, since one changed row can be relevant to
-    more than one detector (e.g. a new trip affects delay AND attendance
-    correlation AND cost, once its cost/emissions rows land)."""
+    """Resolves `org_id` when the caller didn't pass one. Does not otherwise
+    branch on `event` today -- every detector re-scans its own window
+    regardless of which table's row triggered the run, since one changed row
+    can be relevant to more than one detector (e.g. a new trip affects delay
+    AND attendance correlation AND cost, once its cost/emissions rows land).
+
+    BUGFIX (found live: run_sense() returned only data_quality_issue against
+    the real dataset, even after nodes.py's `_resolve_since` was fixed to
+    anchor on the data's own most-recent activity instead of wall-clock
+    `now`): this function used to ALSO fill in a `since` default here, via
+    `datetime.now(timezone.utc) - DEFAULT_ENTRY_LOOKBACK` -- a second,
+    earlier, wall-clock-anchored resolution that ran before any detector, so
+    every detector received an already-concrete (and wrong, for real data)
+    `since` and never hit nodes.py's `_resolve_since(since=None)` branch at
+    all. Leaving `since` unset here when the caller didn't pass one is the
+    fix -- each detector calls the real, data-anchored `_resolve_since`
+    itself, per its own org's actual data."""
 
     org_id = state.get("org_id")
     if not org_id:
@@ -52,11 +58,7 @@ def poll_or_event_entry(state: SenseState) -> dict:
 
         org_id = get_contract().default_org_id
 
-    since = state.get("since")
-    if since is None:
-        since = datetime.now(timezone.utc) - DEFAULT_ENTRY_LOOKBACK
-
-    return {"org_id": org_id, "since": since}
+    return {"org_id": org_id}
 
 
 def _make_detector_node(detector_name: str, engine: Engine):

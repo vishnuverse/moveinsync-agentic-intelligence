@@ -80,8 +80,33 @@ def _since_date(since: datetime) -> date:
     return since.date() if isinstance(since, datetime) else since
 
 
-def _resolve_since(since: datetime | None) -> datetime:
-    return since if since is not None else _utcnow() - DEFAULT_LOOKBACK
+def _resolve_since(conn: Connection, org_id: str, since: datetime | None) -> datetime:
+    """BUGFIX (found live: every detector returned nothing against the real
+    dataset by default): this used to anchor the default lookback window on
+    wall-clock `_utcnow()`, which is fine for the synthetic seed (generated
+    relative to "now" at seed time) but silently breaks on the real dataset,
+    which is fixed to May-Jul 2026 -- any run after that (e.g. today) found
+    zero rows in a "last 7 days from wall-clock now" window, so every
+    detector except flag_data_quality (which isn't time-windowed the same
+    way) produced nothing. Same fix `chart_data.py` already applies to its
+    aggregation queries ("anchored to the data's own most-recent date, not
+    wall-clock now") -- extended here to the sense layer too, via one MAX()
+    query against the trip entity (the central fact table every other
+    entity's real timestamps cluster around). Falls back to wall-clock if
+    trip is empty (e.g. a genuinely fresh/synthetic DB with no data yet)."""
+    if since is not None:
+        return since
+    contract = get_contract()
+    trip = contract.entity("trip")
+    anchor = conn.execute(
+        text(f"SELECT MAX({trip.column('actual_departure')}) FROM {trip.table} WHERE {trip.column('org_id')} = :org_id"),
+        {"org_id": org_id},
+    ).scalar()
+    if anchor is None:
+        return _utcnow() - DEFAULT_LOOKBACK
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    return anchor - DEFAULT_LOOKBACK
 
 
 def safe_detect(fn: Callable[..., list[Signal]]) -> Callable[..., list[Signal]]:
@@ -122,7 +147,7 @@ def detect_delay_signal(
     trip = contract.entity("trip")
     route = contract.entity("route")
     vendor = contract.entity("vendor")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
 
     delay_expr = (
         f"EXTRACT(EPOCH FROM (t.{trip.column('actual_time')} - t.{trip.column('scheduled_time')})) / 60.0"
@@ -228,7 +253,7 @@ def detect_incident_signal(
     contract = get_contract()
     incident = contract.entity("incident")
     route = contract.entity("route")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
     min_rank = INCIDENT_SEVERITY_RANK.get(severity_threshold, 1)
 
     sql = text(f"""
@@ -306,7 +331,7 @@ def detect_cost_anomaly(
     contract = get_contract()
     cost = contract.entity("cost")
     vendor = contract.entity("vendor")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
 
     sql = text(f"""
         SELECT
@@ -403,7 +428,7 @@ def detect_emissions_signal(
     contract = get_contract()
     emission = contract.entity("emission")
     route = contract.entity("route")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
 
     baseline_row = conn.execute(
         text(
@@ -510,7 +535,7 @@ def detect_attendance_correlation(
     commute = contract.entity("commute")
     trip = contract.entity("trip")
     employee = contract.entity("employee")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
 
     delay_expr = (
         f"EXTRACT(EPOCH FROM (t.{trip.column('actual_time')} - t.{trip.column('scheduled_time')})) / 60.0"
@@ -646,7 +671,7 @@ def detect_escort_compliance_signal(
     commute = contract.entity("commute")
     employee = contract.entity("employee")
     incident = contract.entity("incident")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
 
     signals: list[Signal] = []
 
@@ -853,7 +878,7 @@ def detect_billing_discrepancy_signal(
     cost = contract.entity("cost")
     trip = contract.entity("trip")
     vendor = contract.entity("vendor")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
     since_date = _since_date(since)
 
     sql = text(f"""
@@ -1039,7 +1064,7 @@ def flag_data_quality(
     trip = contract.entity("trip")
     employee = contract.entity("employee")
     driver = contract.entity("driver")
-    since = _resolve_since(since)
+    since = _resolve_since(conn, org_id, since)
     since_date = _since_date(since)
 
     issues: list[dict[str, Any]] = []
