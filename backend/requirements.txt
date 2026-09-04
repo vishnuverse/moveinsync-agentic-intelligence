@@ -1,0 +1,7 @@
+# Backend app dependencies. Grows as other subsystems (reason/act/api) land;
+# this initial set covers the data contract layer and the sense subgraph.
+PyYAML>=6.0
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
+asyncpg>=0.29
+langgraph>=0.2

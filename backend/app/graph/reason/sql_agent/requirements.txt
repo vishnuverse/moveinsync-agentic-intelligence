@@ -1,0 +1,17 @@
+# Dependencies for the SQL agent cluster (backend/app/graph/reason/sql_agent/).
+# Mirrors the per-component requirements.txt convention already used by
+# backend/db/seed/ -- fold into a single backend/requirements.txt or
+# pyproject.toml once that lands.
+
+langgraph>=0.2
+langchain>=0.3
+langchain-community>=0.3
+sqlglot>=25.0
+sqlalchemy>=2.0
+psycopg[binary]>=3.1
+
+# Only needed for standalone verification / if no other module already
+# constructs a ChatOpenAI-compatible model for you (backend/app/llm/provider.py
+# is expected to own this in the full system -- see subgraph.py's
+# _default_llm()).
+langchain-openai>=0.2

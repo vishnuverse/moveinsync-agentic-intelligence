@@ -1,0 +1,68 @@
+.metric-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  border-left: 4px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.metric-card-good {
+  border-left-color: var(--color-good);
+}
+
+.metric-card-warning {
+  border-left-color: var(--color-warning);
+}
+
+.metric-card-critical {
+  border-left-color: var(--color-critical);
+}
+
+.metric-card-neutral {
+  border-left-color: var(--color-secondary);
+}
+
+.metric-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.metric-card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.metric-card-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.metric-card-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-heading);
+}
+
+.metric-card-trend {
+  font-size: 12px;
+  color: var(--color-gray);
+}
+
+.metric-card-context {
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.5;
+  flex: 1;
+}
+
+.metric-card-trace-btn {
+  align-self: flex-start;
+}

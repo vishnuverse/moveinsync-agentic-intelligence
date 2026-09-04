@@ -1,0 +1,242 @@
+"""Node implementations for the SQL agent cluster.
+
+Official LangGraph SQL-agent tutorial pattern, implemented as plain sequential
+node functions (not a tool-calling ReAct loop) so the retry cap and error log
+are counted deterministically rather than left to the model's own tool-call
+discipline -- important since the default LLM (Sarvam) is not a frontier
+reasoning model (plan §5/§14) and a ReAct loop is the more failure-prone shape
+for it.
+
+Nodes are methods on SQLAgentNodes so they can close over the SQLDatabase/LLM
+without relying on LangGraph's config-passing, keeping each method a clean
+`(state) -> partial state update` function per plan §4 ("nodes are pure
+functions").
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from langchain_community.utilities import SQLDatabase
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+from . import prompts
+from .security import CheckedQuery, SQLSecurityError, SQLSyntaxError, enforce_select_only
+from .state import DEFAULT_ROW_LIMIT, MAX_SQL_RETRIES, SQLAgentState
+
+_SQL_FENCE_RE = re.compile(r"```sql\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+_BARE_SELECT_RE = re.compile(r"(SELECT\b.*)", re.IGNORECASE | re.DOTALL)
+
+_TRUNCATED_SENTINEL = "__GENERATION_TRUNCATED__"
+DEFAULT_GENERATE_MAX_TOKENS = 4096
+DEFAULT_ANSWER_MAX_TOKENS = 1024
+
+
+def _extract_sql(text: str) -> str:
+    """Pull the SQL out of an LLM response that (per prompt) wraps it in ```sql fences.
+
+    Falls back to a bare SELECT-onward scan for models that ignore the fence
+    instruction -- keeps the pipeline resilient to a non-frontier model's
+    formatting slips rather than treating "no fence" as an automatic failure.
+    """
+    fenced = _SQL_FENCE_RE.findall(text)
+    if fenced:
+        return fenced[-1].strip().rstrip(";").strip()
+    bare = _BARE_SELECT_RE.search(text)
+    if bare:
+        return bare.group(1).strip().rstrip(";").strip()
+    return text.strip().rstrip(";").strip()
+
+
+def _format_rows_preview(rows: list[dict[str, Any]], *, limit: int = 20) -> str:
+    if not rows:
+        return "(no rows returned)"
+    preview = rows[:limit]
+    columns = list(preview[0].keys())
+    lines = ["\t".join(columns)]
+    for row in preview:
+        lines.append("\t".join(str(row.get(c, "")) for c in columns))
+    return "\n".join(lines)
+
+
+class SQLAgentNodes:
+    def __init__(
+        self,
+        db: SQLDatabase,
+        llm: BaseChatModel,
+        *,
+        org_id: str,
+        row_limit: int = DEFAULT_ROW_LIMIT,
+        generate_max_tokens: int = DEFAULT_GENERATE_MAX_TOKENS,
+        answer_max_tokens: int = DEFAULT_ANSWER_MAX_TOKENS,
+    ) -> None:
+        self.db = db
+        self.llm = llm
+        self.org_id = org_id
+        self.row_limit = row_limit
+        # Bound with an explicit max_tokens: the chain-of-thought prompt (#3)
+        # asks for step-by-step reasoning *before* the SQL fence, and a
+        # provider's low default output cap can truncate the response before
+        # the SQL ever appears (observed against Sarvam's default 2048-token
+        # cap during verification) -- bind a roomier budget defensively
+        # rather than trusting whatever the injected llm happens to default to.
+        self._generate_llm = llm.bind(max_tokens=generate_max_tokens)
+        self._answer_llm = llm.bind(max_tokens=answer_max_tokens)
+
+    # -- list_tables -----------------------------------------------------
+
+    def list_tables(self, state: SQLAgentState) -> dict[str, Any]:
+        table_names = self.db.get_usable_table_names()
+        return {"table_names": list(table_names)}
+
+    # -- get_schema --------------------------------------------------------
+    # SQLDatabase is constructed with sample_rows_in_table_info set (see
+    # subgraph.py), so get_table_info() already returns full CREATE TABLE DDL
+    # plus real sample rows per table in one call -- hardening requirement #1.
+
+    def get_schema(self, state: SQLAgentState) -> dict[str, Any]:
+        schema_context = self.db.get_table_info(table_names=state["table_names"])
+        return {"schema_context": schema_context}
+
+    # -- generate_query ------------------------------------------------
+
+    def generate_query(self, state: SQLAgentState) -> dict[str, Any]:
+        system = prompts.SYSTEM_PROMPT.format(
+            org_id=self.org_id, schema_context=state["schema_context"]
+        )
+        messages = [SystemMessage(content=system)]
+
+        errors = state.get("query_error_log") or []
+        if errors:
+            messages.append(
+                HumanMessage(
+                    content=prompts.RETRY_PROMPT_TEMPLATE.format(
+                        previous_sql=state.get("generated_sql") or "(none)",
+                        errors="\n".join(f"- {e}" for e in errors),
+                    )
+                )
+            )
+        else:
+            messages.append(HumanMessage(content=f"Question: {state['question']}"))
+
+        response = self._generate_llm.invoke(messages)
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        was_truncated = response.response_metadata.get("finish_reason") == "length"
+        if was_truncated:
+            # A "length" finish_reason means the API cut the response off
+            # mid-stream -- any SQL text extracted from it (fenced or via the
+            # bare-SELECT fallback) is by definition incomplete and must not
+            # be trusted, even if it superficially looks non-empty. Treat it
+            # as a distinct, sentinel failure rather than letting garbled SQL
+            # reach check_query's sqlglot parser as a generic syntax error.
+            sql = _TRUNCATED_SENTINEL
+        else:
+            sql = _extract_sql(content)
+        return {
+            "generated_sql": sql,
+            "messages": [HumanMessage(content=state["question"])] if not errors else [],
+        }
+
+    # -- check_query -----------------------------------------------------
+
+    def check_query(self, state: SQLAgentState) -> dict[str, Any]:
+        sql = state["generated_sql"]
+        if sql == _TRUNCATED_SENTINEL:
+            return {
+                "generated_sql": "",
+                "query_error_log": [
+                    *state["query_error_log"],
+                    "GenerationTruncated: response hit the token limit before the SQL block was "
+                    "emitted -- keep the Reasoning section shorter and go straight to the SQL.",
+                ],
+                "sql_retry_count": state["sql_retry_count"] + 1,
+                "last_step_ok": False,
+            }
+        try:
+            checked: CheckedQuery = enforce_select_only(sql, row_limit=self.row_limit)
+        except (SQLSyntaxError, SQLSecurityError) as exc:
+            return {
+                "query_error_log": [*state["query_error_log"], f"{type(exc).__name__}: {exc}"],
+                "sql_retry_count": state["sql_retry_count"] + 1,
+                "last_step_ok": False,
+            }
+        return {"generated_sql": checked.safe_sql, "last_step_ok": True}
+
+    @staticmethod
+    def route_after_check(state: SQLAgentState) -> str:
+        """Conditional-edge router after check_query."""
+        if state["last_step_ok"]:
+            return "proceed"
+        if state["sql_retry_count"] >= MAX_SQL_RETRIES:
+            return "fail_closed"
+        return "retry"
+
+    # -- run_query ---------------------------------------------------------
+
+    def run_query(self, state: SQLAgentState) -> dict[str, Any]:
+        sql = state["generated_sql"]
+        try:
+            # db._execute is the underlying call db.run()/run_no_throw() both
+            # delegate to; used directly (rather than db.run()) because run()
+            # always collapses the result to a stringified repr, and we need
+            # real row dicts for the row-count guard and the answer prompt.
+            rows = self.db._execute(sql, fetch="all")  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 - surfaced into the retry loop, not swallowed
+            error = f"DBExecutionError: {exc}"
+            return {
+                "query_error_log": [*state["query_error_log"], error],
+                "sql_retry_count": state["sql_retry_count"] + 1,
+                "result_rows": None,
+                "last_step_ok": False,
+            }
+
+        capped_rows = rows[: self.row_limit]
+        return {"result_rows": capped_rows, "last_step_ok": True}
+
+    @staticmethod
+    def route_after_run(state: SQLAgentState) -> str:
+        if state["last_step_ok"]:
+            return "proceed"
+        if state["sql_retry_count"] >= MAX_SQL_RETRIES:
+            return "fail_closed"
+        return "retry"
+
+    # -- synthesize_answer -------------------------------------------------
+
+    def synthesize_answer(self, state: SQLAgentState) -> dict[str, Any]:
+        rows = state["result_rows"] or []
+        messages = [
+            SystemMessage(content=prompts.ANSWER_SYSTEM_PROMPT),
+            HumanMessage(
+                content=prompts.ANSWER_USER_TEMPLATE.format(
+                    question=state["question"],
+                    sql=state["generated_sql"],
+                    row_count=len(rows),
+                    rows_preview=_format_rows_preview(rows),
+                )
+            ),
+        ]
+        response = self._answer_llm.invoke(messages)
+        answer = response.content if isinstance(response.content, str) else str(response.content)
+        return {
+            "final_answer": answer.strip(),
+            "success": True,
+            "done": True,
+            "messages": [AIMessage(content=answer.strip())],
+        }
+
+    # -- fail_closed ---------------------------------------------------
+
+    def fail_closed(self, state: SQLAgentState) -> dict[str, Any]:
+        message = prompts.FAIL_CLOSED_MESSAGE.format(
+            retries=state["sql_retry_count"],
+            errors="; ".join(state["query_error_log"]) or "(none logged)",
+        )
+        return {
+            "final_answer": message,
+            "success": False,
+            "done": True,
+            "messages": [AIMessage(content=message)],
+        }
