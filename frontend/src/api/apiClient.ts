@@ -1,17 +1,20 @@
 import type {
   ActivityEntry,
   ApiClient,
+  ChartSeriesData,
   ChatMessage,
   ChatRequest,
   ChatResponse,
   MetricCardData,
   NotificationItem,
   PersonaId,
+  PieChartData,
   ReportMeta,
   ResumeDecisionRequest,
   ResumeDecisionResponse,
   Role,
   TraceStep,
+  VendorScorecardData,
 } from "./types";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -71,5 +74,33 @@ export const realClient: ApiClient = {
 
   getActivity(): Promise<ActivityEntry[]> {
     return request<ActivityEntry[]>("/activity");
+  },
+
+  getOtaTrend(): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>("/charts/ota-trend");
+  },
+
+  getDelayReasons(): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>("/charts/delay-reasons");
+  },
+
+  getNoShowTrend(): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>("/charts/no-show-trend");
+  },
+
+  getAbsenceSplit(): Promise<PieChartData> {
+    return request<PieChartData>("/charts/absence-split");
+  },
+
+  getBillingDiscrepancy(): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>("/charts/billing-discrepancy");
+  },
+
+  getEmissionsByFuel(): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>("/charts/emissions-by-fuel");
+  },
+
+  getVendorScorecard(): Promise<VendorScorecardData> {
+    return request<VendorScorecardData>("/charts/vendor-scorecard");
   },
 };

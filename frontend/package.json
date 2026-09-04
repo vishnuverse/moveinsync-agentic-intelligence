@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "highcharts": "^13.0.2",
+    "highcharts-react-official": "^3.2.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

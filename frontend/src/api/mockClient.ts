@@ -2,26 +2,36 @@ import {
   ACTIVITY_LOG,
   ROLES,
   TRACE_LIBRARY,
+  absenceSplitMock,
+  billingDiscrepancyMock,
   buildTrace,
   dashboardFor,
+  delayReasonsMock,
+  emissionsByFuelMock,
   initialChatHistory,
   initialNotifications,
+  noShowTrendMock,
+  otaTrendMock,
   reportsFor,
+  vendorScorecardMock,
 } from "./mockData";
 import type {
   ActivityEntry,
   ApiClient,
+  ChartSeriesData,
   ChatMessage,
   ChatRequest,
   ChatResponse,
   MetricCardData,
   NotificationItem,
   PersonaId,
+  PieChartData,
   ReportMeta,
   ResumeDecisionRequest,
   ResumeDecisionResponse,
   Role,
   TraceStep,
+  VendorScorecardData,
 } from "./types";
 
 function delay(min = 220, max = 620): Promise<void> {
@@ -188,5 +198,40 @@ export const mockClient: ApiClient = {
   async getActivity(): Promise<ActivityEntry[]> {
     await delay();
     return ACTIVITY_LOG;
+  },
+
+  async getOtaTrend(): Promise<ChartSeriesData> {
+    await delay();
+    return otaTrendMock();
+  },
+
+  async getDelayReasons(): Promise<ChartSeriesData> {
+    await delay();
+    return delayReasonsMock();
+  },
+
+  async getNoShowTrend(): Promise<ChartSeriesData> {
+    await delay();
+    return noShowTrendMock();
+  },
+
+  async getAbsenceSplit(): Promise<PieChartData> {
+    await delay();
+    return absenceSplitMock();
+  },
+
+  async getBillingDiscrepancy(): Promise<ChartSeriesData> {
+    await delay();
+    return billingDiscrepancyMock();
+  },
+
+  async getEmissionsByFuel(): Promise<ChartSeriesData> {
+    await delay();
+    return emissionsByFuelMock();
+  },
+
+  async getVendorScorecard(): Promise<VendorScorecardData> {
+    await delay();
+    return vendorScorecardMock();
   },
 };

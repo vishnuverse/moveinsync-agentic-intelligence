@@ -93,6 +93,45 @@ export interface ActivityEntry {
   triggered_by: ActivityTrigger;
 }
 
+// Chart data (frontend/src/charts/) -- shaped to feed directly into a
+// Highcharts series config, field-for-field with backend/app/api/schemas.py's
+// Chart*/PieChartData/VendorScorecardData models.
+export interface ChartSeries {
+  name: string;
+  data: number[];
+}
+
+export interface ChartSeriesData {
+  categories: string[];
+  series: ChartSeries[];
+}
+
+export interface PieSlice {
+  name: string;
+  y: number;
+}
+
+export interface PieSeries {
+  name: string;
+  data: PieSlice[];
+}
+
+export interface PieChartData {
+  series: PieSeries[];
+}
+
+export interface VendorScorecardEntry {
+  vendor: string;
+  sla_pct: number;
+  cost_per_km: number;
+  incident_count: number;
+  sla_trend: number[];
+}
+
+export interface VendorScorecardData {
+  vendors: VendorScorecardEntry[];
+}
+
 export interface ApiClient {
   getRoles(): Promise<Role[]>;
   getDashboard(persona: PersonaId): Promise<MetricCardData[]>;
@@ -106,4 +145,11 @@ export interface ApiClient {
   getChatHistory(persona: PersonaId): Promise<ChatMessage[]>;
   postChat(body: ChatRequest): Promise<ChatResponse>;
   getActivity(): Promise<ActivityEntry[]>;
+  getOtaTrend(): Promise<ChartSeriesData>;
+  getDelayReasons(): Promise<ChartSeriesData>;
+  getNoShowTrend(): Promise<ChartSeriesData>;
+  getAbsenceSplit(): Promise<PieChartData>;
+  getBillingDiscrepancy(): Promise<ChartSeriesData>;
+  getEmissionsByFuel(): Promise<ChartSeriesData>;
+  getVendorScorecard(): Promise<VendorScorecardData>;
 }

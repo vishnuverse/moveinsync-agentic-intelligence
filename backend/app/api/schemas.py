@@ -99,3 +99,42 @@ class ActivityEntry(BaseModel):
 
 class ErrorBody(BaseModel):
     detail: Any
+
+
+# -- chart endpoints (app/api/charts.py) -- shaped to feed straight into a
+# Highcharts series config on the frontend (frontend/src/charts/), field for
+# field with frontend/src/api/types.ts's ChartSeries* interfaces.
+class ChartSeries(BaseModel):
+    name: str
+    data: list[float]
+
+
+class ChartSeriesData(BaseModel):
+    categories: list[str]
+    series: list[ChartSeries]
+
+
+class PieSlice(BaseModel):
+    name: str
+    y: float
+
+
+class PieSeries(BaseModel):
+    name: str
+    data: list[PieSlice]
+
+
+class PieChartData(BaseModel):
+    series: list[PieSeries]
+
+
+class VendorScorecardEntry(BaseModel):
+    vendor: str
+    sla_pct: float
+    cost_per_km: float
+    incident_count: int
+    sla_trend: list[float]
+
+
+class VendorScorecardData(BaseModel):
+    vendors: list[VendorScorecardEntry]
