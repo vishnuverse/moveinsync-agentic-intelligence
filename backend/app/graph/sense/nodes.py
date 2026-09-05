@@ -173,7 +173,7 @@ def detect_delay_signal(
         f"EXTRACT(EPOCH FROM (t.{trip.column('actual_time')} - t.{trip.column('scheduled_time')})) / 60.0"
     )
 
-    sql = text(f"""
+    sql_text = f"""
         SELECT
             t.{trip.column('route_id')} AS route_id,
             r.{route.column('route_code')} AS route_code,
@@ -196,7 +196,8 @@ def detect_delay_signal(
         GROUP BY t.{trip.column('route_id')}, r.{route.column('route_code')}, r.{route.column('name')},
                  r.{route.column('vendor_id')}, v.{vendor.column('name')}, v.{vendor.column('sla_target_pct')}
         HAVING COUNT(*) >= 3
-    """)
+    """
+    sql = text(sql_text)
 
     rows = conn.execute(
         sql, {"org_id": org_id, "delay_threshold": delay_threshold_minutes, "since_date": _since_date(since)}
@@ -241,6 +242,7 @@ def detect_delay_signal(
                     "max_delay_minutes": round(max_delay, 2),
                     "delay_threshold_minutes": delay_threshold_minutes,
                     "vendor_sla_target_pct": float(row["vendor_sla_target_pct"]) if row["vendor_sla_target_pct"] is not None else None,
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -276,7 +278,7 @@ def detect_incident_signal(
     since = _resolve_since(conn, org_id, since)
     min_rank = INCIDENT_SEVERITY_RANK.get(severity_threshold, 1)
 
-    sql = text(f"""
+    sql_text = f"""
         SELECT
             i.{incident.column('id')} AS id,
             i.{incident.column('route_id')} AS route_id,
@@ -293,7 +295,8 @@ def detect_incident_signal(
           AND i.{incident.column('occurred_at')} >= :since
           AND i.{incident.column('status')} IN ('open', 'investigating')
         ORDER BY i.{incident.column('occurred_at')} DESC
-    """)
+    """
+    sql = text(sql_text)
 
     rows = conn.execute(sql, {"org_id": org_id, "since": since}).mappings().all()
 
@@ -317,6 +320,7 @@ def detect_incident_signal(
                     "incident_type": row["incident_type"],
                     "status": row["status"],
                     "occurred_at": row["occurred_at"].isoformat() if row["occurred_at"] else None,
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -353,7 +357,7 @@ def detect_cost_anomaly(
     vendor = contract.entity("vendor")
     since = _resolve_since(conn, org_id, since)
 
-    sql = text(f"""
+    sql_text = f"""
         SELECT
             c.{cost.column('vendor_id')} AS vendor_id,
             v.{vendor.column('name')} AS vendor_name,
@@ -367,7 +371,8 @@ def detect_cost_anomaly(
           AND c.{cost.column('cost_per_km')} IS NOT NULL
         GROUP BY c.{cost.column('vendor_id')}, v.{vendor.column('name')}, v.{vendor.column('cost_per_km')}
         HAVING COUNT(*) >= 3
-    """)
+    """
+    sql = text(sql_text)
 
     rows = conn.execute(sql, {"org_id": org_id, "since_date": _since_date(since)}).mappings().all()
     if not rows:
@@ -421,6 +426,7 @@ def detect_cost_anomaly(
                     "fleet_avg_cost_per_km": round(others_avg, 2) if others_avg is not None else None,
                     "divergence_vs_contract_pct": round(div_vs_contract * 100, 2) if div_vs_contract is not None else None,
                     "divergence_vs_fleet_pct": round(div_vs_fleet * 100, 2) if div_vs_fleet is not None else None,
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -441,9 +447,12 @@ def detect_emissions_signal(
     conn: Connection,
     org_id: str,
     since: datetime | None = None,
+    min_ratio_over_baseline: float = 1.05,
 ) -> list[Signal]:
     """Flags routes whose average co2_per_passenger_km trends above the ICE
-    baseline pulled from `sustainability_targets` (not hardcoded)."""
+    baseline pulled from `sustainability_targets` (not hardcoded).
+    `min_ratio_over_baseline` (plan SP-B §2c) makes the "a few % over
+    baseline is noise" floor configurable -- was a bare `1.05` literal."""
 
     contract = get_contract()
     emission = contract.entity("emission")
@@ -467,7 +476,7 @@ def detect_emissions_signal(
         logger.warning("no carbon_gco2_per_passenger_km row in sustainability_targets; using hardcoded fallback")
         baseline = DEFAULT_ICE_BASELINE_GCO2_PER_PAX_KM
 
-    sql = text(f"""
+    sql_text = f"""
         SELECT
             e.{emission.column('route_id')} AS route_id,
             r.{route.column('route_code')} AS route_code,
@@ -482,7 +491,8 @@ def detect_emissions_signal(
           AND e.{emission.column('co2_per_passenger_km')} IS NOT NULL
         GROUP BY e.{emission.column('route_id')}, r.{route.column('route_code')}, r.{route.column('name')}
         HAVING COUNT(*) >= 3
-    """)
+    """
+    sql = text(sql_text)
 
     rows = conn.execute(sql, {"org_id": org_id, "since_date": _since_date(since)}).mappings().all()
 
@@ -492,7 +502,7 @@ def detect_emissions_signal(
         ratio = avg_co2 / baseline
         # A few % over baseline is noise inherent to the ICE emission-factor
         # spread, not a trend worth surfacing -- require a meaningful margin.
-        if ratio < 1.05:
+        if ratio < min_ratio_over_baseline:
             continue
 
         if ratio >= 1.5:
@@ -519,6 +529,7 @@ def detect_emissions_signal(
                     "max_co2_per_passenger_km": round(float(row["max_co2_per_passenger_km"]), 2),
                     "baseline_gco2_per_passenger_km": baseline,
                     "pct_above_baseline": round((ratio - 1.0) * 100, 2),
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -542,6 +553,8 @@ def detect_attendance_correlation(
     delay_threshold_minutes: float = DEFAULT_DELAY_BREACH_MINUTES,
     min_late_samples: int = DEFAULT_MIN_LATE_SAMPLES,
     signal_limit: int = DEFAULT_ATTENDANCE_SIGNAL_LIMIT,
+    transport_correlation_ratio: float = DEFAULT_TRANSPORT_CORRELATION_RATIO,
+    unrelated_correlation_ratio: float = DEFAULT_UNRELATED_CORRELATION_RATIO,
 ) -> list[Signal]:
     """Joins attendance to commute (via trip) to classify each employee's late
     marks as transport-caused vs. unrelated, and flags both directions:
@@ -566,14 +579,25 @@ def detect_attendance_correlation(
         f"EXTRACT(EPOCH FROM (t.{trip.column('actual_time')} - t.{trip.column('scheduled_time')})) / 60.0"
     )
 
-    sql = text(f"""
+    sql_text = f"""
         SELECT
             a.{attendance.column('employee_id')} AS employee_id,
             emp.{employee.column('name')} AS employee_name,
             emp.{employee.column('team_id')} AS team_id,
             COUNT(*) AS late_count,
             COUNT(*) FILTER (
-                WHERE c.{commute.column('mode')} = 'shuttle'
+                -- BUGFIX (found live: verified against the real dataset that
+                -- some orgs' no-shows/lates are carried entirely on
+                -- mode='cab' with ZERO 'shuttle' rows -- e.g. vanta-Aus is
+                -- 100% cab -- so a bare `mode = 'shuttle'` filter silently
+                -- zeroed out transport_caused_count for every employee in
+                -- those orgs, regardless of actual delay data. Both real
+                -- mis.commute.mode values are company-provided transport
+                -- (walk_in/wfh, the only non-transport modes the original
+                -- CHECK constraint allows, never appear in the real
+                -- ingested data) -- either can equally cause a delay-driven
+                -- late mark, so both belong in this filter.
+                WHERE c.{commute.column('mode')} IN ('shuttle', 'cab')
                   AND t.{trip.column('actual_time')} IS NOT NULL
                   AND t.{trip.column('scheduled_time')} IS NOT NULL
                   AND {delay_expr} > :delay_threshold
@@ -588,7 +612,8 @@ def detect_attendance_correlation(
           AND a.{attendance.column('work_date')} >= :since_date
         GROUP BY a.{attendance.column('employee_id')}, emp.{employee.column('name')}, emp.{employee.column('team_id')}
         HAVING COUNT(*) >= :min_late_samples
-    """)
+    """
+    sql = text(sql_text)
 
     rows = conn.execute(
         sql,
@@ -606,9 +631,9 @@ def detect_attendance_correlation(
         late_count = row["late_count"]
         transport_count = row["transport_caused_count"] or 0
         ratio = transport_count / late_count if late_count else 0.0
-        if ratio >= DEFAULT_TRANSPORT_CORRELATION_RATIO:
+        if ratio >= transport_correlation_ratio:
             correlated_candidates.append((row, ratio))
-        elif ratio <= DEFAULT_UNRELATED_CORRELATION_RATIO:
+        elif ratio <= unrelated_correlation_ratio:
             unrelated_candidates.append((row, ratio))
 
     # Cap each direction independently (worst/highest late_count first) --
@@ -637,6 +662,7 @@ def detect_attendance_correlation(
                     "late_count": late_count,
                     "transport_caused_count": transport_count,
                     "correlation_ratio": round(ratio, 3),
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -661,6 +687,7 @@ def detect_attendance_correlation(
                     "late_count": late_count,
                     "transport_caused_count": transport_count,
                     "correlation_ratio": round(ratio, 3),
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -682,9 +709,13 @@ def detect_escort_compliance_signal(
     org_id: str,
     since: datetime | None = None,
     violation_limit: int = DEFAULT_ESCORT_VIOLATION_SIGNAL_LIMIT,
+    night_window_start_hour: int = NIGHT_WINDOW_START_HOUR,
+    night_window_end_hour: int = NIGHT_WINDOW_END_HOUR,
+    drop_delay_critical_minutes: float = DEFAULT_DELAY_BREACH_MINUTES,
 ) -> list[Signal]:
-    """PRD v3 Feature 1 (Escort Compliance & Real-time Safety Monitor). Two
-    independent sub-detections, both safety-critical:
+    """PRD v3 Feature 1 (Escort Compliance & Real-time Safety Monitor) --
+    plan SP-B §B0/§B1 "Hotspot 1: female employee traveling without an
+    escort." Three independent sub-detections, all safety-critical:
 
     1. Unescorted late-night LOGOUT (drop) trips carrying a female employee.
        One Signal per violating trip -- verified live against the real
@@ -695,7 +726,18 @@ def detect_escort_compliance_signal(
        Escort Compliance (%)" formula) is computed over the FULL unbounded
        set regardless of the cap, and attached to every violation Signal's
        raw_metric so the true aggregate is never hidden by the cap.
-    2. Any active (status='open') Sev-1/panic-family alert. Combined as an
+       Severity is graded by delay (SP-B addition): an unescorted drop that
+       is ALSO delayed past `drop_delay_critical_minutes` is `critical` (the
+       employee's exposure window is both unsupervised and longer than
+       planned); an on-time unescorted drop stays `high` (today's original
+       behavior, unchanged).
+    2. Unescorted late-night LOGIN (pickup) trips carrying a female employee
+       (SP-B addition) -- structurally identical to sub-detection 1 but for
+       the pickup leg, since an early/late-night pickup carries the same
+       unsupervised-exposure risk sub-detection 1 already covers for drops.
+       Its own org-wide compliance aggregate, independent of sub-detection
+       1's, since pickup and drop are different trips.
+    3. Any active (status='open') Sev-1/panic-family alert. Combined as an
        OR, not an AND, of severity='critical' and incident_type in the
        panic/SOS family -- verified live against the real dataset that every
        severity='critical' row is already status='resolved' (an AND would
@@ -717,22 +759,22 @@ def detect_escort_compliance_signal(
 
     signals: list[Signal] = []
 
-    # --- sub-detection 1: unescorted late-night female LOGOUT trips -------
-    night_filter = (
-        f"(EXTRACT(HOUR FROM t.{trip.column('actual_departure')}) >= {NIGHT_WINDOW_START_HOUR} "
-        f"OR EXTRACT(HOUR FROM t.{trip.column('actual_departure')}) < {NIGHT_WINDOW_END_HOUR})"
-    )
-    base_where = f"""
-        t.{trip.column('org_id')} = :org_id
-          AND t.{trip.column('trip_direction')} = 'LOGOUT'
-          AND e.{employee.column('gender')} = 'FEMALE'
-          AND t.{trip.column('actual_departure')} IS NOT NULL
-          AND t.{trip.column('actual_departure')} >= :since
-          AND {night_filter}
-    """
+    def night_window_filter(departure_expr: str) -> str:
+        return f"(EXTRACT(HOUR FROM {departure_expr}) >= {night_window_start_hour} OR EXTRACT(HOUR FROM {departure_expr}) < {night_window_end_hour})"
 
-    compliance_row = conn.execute(
-        text(f"""
+    def unescorted_leg_signals(*, trip_direction: str, leg_label: str) -> list[Signal]:
+        """Shared body for sub-detections 1 (LOGOUT/drop) and 2 (LOGIN/pickup)
+        -- same query shape, only `trip_direction`/labeling differ."""
+        night_filter = night_window_filter(f"t.{trip.column('actual_departure')}")
+        base_where = f"""
+            t.{trip.column('org_id')} = :org_id
+              AND t.{trip.column('trip_direction')} = :trip_direction
+              AND e.{employee.column('gender')} = 'FEMALE'
+              AND t.{trip.column('actual_departure')} IS NOT NULL
+              AND t.{trip.column('actual_departure')} >= :since
+              AND {night_filter}
+        """
+        compliance_sql = f"""
             SELECT
                 COUNT(*) AS total_late_night_female,
                 COUNT(*) FILTER (WHERE t.{trip.column('actual_escort')} = FALSE) AS unescorted_count
@@ -740,68 +782,80 @@ def detect_escort_compliance_signal(
             JOIN {commute.table} c ON c.{commute.column('trip_id')} = t.{trip.column('id')}
             JOIN {employee.table} e ON e.{employee.column('id')} = c.{commute.column('employee_id')}
             WHERE {base_where}
-        """),
-        {"org_id": org_id, "since": since},
-    ).mappings().first()
-    total_late_night_female = (compliance_row["total_late_night_female"] or 0) if compliance_row else 0
-    unescorted_count = (compliance_row["unescorted_count"] or 0) if compliance_row else 0
-    compliance_pct = (
-        round((1 - unescorted_count / total_late_night_female) * 100, 2)
-        if total_late_night_female
-        else 100.0
-    )
+        """
+        compliance_row = conn.execute(
+            text(compliance_sql), {"org_id": org_id, "since": since, "trip_direction": trip_direction}
+        ).mappings().first()
+        total = (compliance_row["total_late_night_female"] or 0) if compliance_row else 0
+        unescorted = (compliance_row["unescorted_count"] or 0) if compliance_row else 0
+        compliance_pct = round((1 - unescorted / total) * 100, 2) if total else 100.0
 
-    if unescorted_count:
+        leg_signals: list[Signal] = []
+        if not unescorted:
+            return leg_signals
+
         # DISTINCT ON (trip_id): a shared cab can carry more than one female
-        # employee on the same LOGOUT trip (multiple mis.commute legs join
-        # to the same mis.trip row) -- verified live this happens for real;
-        # without the dedup the same trip_id would emit near-duplicate
-        # Signals (and collide on the same supervisor.py thread_id, since
-        # thread_id is keyed on entity_id only), when the actionable unit
-        # (dispatch a warning to the vendor for THIS trip) is per-trip, not
-        # per-rider.
+        # employee on the same trip (multiple mis.commute legs join to the
+        # same mis.trip row) -- verified live this happens for real; without
+        # the dedup the same trip_id would emit near-duplicate Signals (and
+        # collide on the same supervisor.py thread_id, since thread_id is
+        # keyed on entity_id only), when the actionable unit (dispatch a
+        # warning to the vendor for THIS trip) is per-trip, not per-rider.
+        violation_sql = f"""
+            SELECT trip_id, route_id, actual_departure, delay_minutes, employee_id, employee_name
+            FROM (
+                SELECT DISTINCT ON (t.{trip.column('id')})
+                    t.{trip.column('id')} AS trip_id,
+                    t.{trip.column('route_id')} AS route_id,
+                    t.{trip.column('actual_departure')} AS actual_departure,
+                    t.{trip.column('delay_minutes')} AS delay_minutes,
+                    e.{employee.column('id')} AS employee_id,
+                    e.{employee.column('name')} AS employee_name
+                FROM {trip.table} t
+                JOIN {commute.table} c ON c.{commute.column('trip_id')} = t.{trip.column('id')}
+                JOIN {employee.table} e ON e.{employee.column('id')} = c.{commute.column('employee_id')}
+                WHERE {base_where}
+                  AND t.{trip.column('actual_escort')} = FALSE
+                ORDER BY t.{trip.column('id')}, e.{employee.column('id')}
+            ) dedup
+            ORDER BY actual_departure DESC
+            LIMIT :violation_limit
+        """
         violation_rows = conn.execute(
-            text(f"""
-                SELECT trip_id, route_id, actual_departure, employee_id, employee_name
-                FROM (
-                    SELECT DISTINCT ON (t.{trip.column('id')})
-                        t.{trip.column('id')} AS trip_id,
-                        t.{trip.column('route_id')} AS route_id,
-                        t.{trip.column('actual_departure')} AS actual_departure,
-                        e.{employee.column('id')} AS employee_id,
-                        e.{employee.column('name')} AS employee_name
-                    FROM {trip.table} t
-                    JOIN {commute.table} c ON c.{commute.column('trip_id')} = t.{trip.column('id')}
-                    JOIN {employee.table} e ON e.{employee.column('id')} = c.{commute.column('employee_id')}
-                    WHERE {base_where}
-                      AND t.{trip.column('actual_escort')} = FALSE
-                    ORDER BY t.{trip.column('id')}, e.{employee.column('id')}
-                ) dedup
-                ORDER BY actual_departure DESC
-                LIMIT :violation_limit
-            """),
-            {"org_id": org_id, "since": since, "violation_limit": violation_limit},
+            text(violation_sql),
+            {"org_id": org_id, "since": since, "trip_direction": trip_direction, "violation_limit": violation_limit},
         ).mappings().all()
 
         for row in violation_rows:
             departure = row["actual_departure"]
-            signals.append(
+            delay_minutes = row["delay_minutes"]
+            is_critical_delay = (
+                leg_label == "drop" and delay_minutes is not None and float(delay_minutes) >= drop_delay_critical_minutes
+            )
+            severity = "critical" if is_critical_delay else "high"
+            delay_clause = (
+                f" and delayed {float(delay_minutes):.0f} min past schedule" if is_critical_delay else ""
+            )
+            leg_signals.append(
                 Signal(
                     signal_type="escort_compliance_violation",
                     entity_type="trip",
                     entity_id=str(row["trip_id"]),
-                    severity="high",
+                    severity=severity,
                     summary=(
-                        f"Unescorted late-night drop (LOGOUT) trip {row['trip_id']} for a female "
-                        f"employee at {departure} (actual_escort=False). Org-wide late-night female "
-                        f"escort compliance is {compliance_pct:.1f}% ({unescorted_count} of "
-                        f"{total_late_night_female} late-night female trips unescorted)."
+                        f"Unescorted late-night {leg_label} ({trip_direction}) trip {row['trip_id']} for a "
+                        f"female employee at {departure} (actual_escort=False){delay_clause}. Org-wide "
+                        f"late-night female {leg_label} escort compliance is {compliance_pct:.1f}% "
+                        f"({unescorted} of {total} late-night female {leg_label} trips unescorted)."
                     ),
                     raw_metric={
+                        "pickup_or_drop": leg_label,
                         "actual_departure": departure.isoformat() if departure else None,
-                        "org_late_night_female_escort_compliance_pct": compliance_pct,
-                        "org_total_late_night_female_trips": total_late_night_female,
-                        "org_unescorted_late_night_female_trips": unescorted_count,
+                        "delay_minutes": float(delay_minutes) if delay_minutes is not None else None,
+                        f"org_total_late_night_female_{leg_label}_trips": total,
+                        f"org_unescorted_late_night_female_{leg_label}_trips": unescorted,
+                        f"org_late_night_female_{leg_label}_escort_compliance_pct": compliance_pct,
+                        "detector_sql": violation_sql,
                     },
                     org_id=org_id,
                     detected_at=_utcnow(),
@@ -813,9 +867,17 @@ def detect_escort_compliance_signal(
                     },
                 )
             )
+        return leg_signals
 
-    # --- sub-detection 2: active Sev-1 / panic-family alerts ---------------
-    incident_sql = text(f"""
+    # --- sub-detection 1: unescorted late-night female LOGOUT (drop) trips
+    signals.extend(unescorted_leg_signals(trip_direction="LOGOUT", leg_label="drop"))
+
+    # --- sub-detection 2: unescorted late-night female LOGIN (pickup) trips
+    # (SP-B addition -- see docstring point 2)
+    signals.extend(unescorted_leg_signals(trip_direction="LOGIN", leg_label="pickup"))
+
+    # --- sub-detection 3: active Sev-1 / panic-family alerts ---------------
+    incident_sql_text = f"""
         SELECT
             i.{incident.column('id')} AS id,
             i.{incident.column('trip_id')} AS trip_id,
@@ -829,7 +891,8 @@ def detect_escort_compliance_signal(
           AND i.{incident.column('status')} = 'open'
           AND i.{incident.column('occurred_at')} >= :since
           AND (i.{incident.column('severity')} = 'critical' OR i.{incident.column('incident_type')} IN :panic_types)
-    """).bindparams(bindparam("panic_types", expanding=True))
+    """
+    incident_sql = text(incident_sql_text).bindparams(bindparam("panic_types", expanding=True))
 
     incident_rows = conn.execute(
         incident_sql, {"org_id": org_id, "since": since, "panic_types": list(PANIC_EVENT_TYPES)}
@@ -864,6 +927,7 @@ def detect_escort_compliance_signal(
                     "acknowledge_time": acknowledge_time.isoformat() if acknowledge_time else None,
                     "response_time_seconds": response_time_seconds,
                     "unacknowledged_minutes": unacknowledged_minutes,
+                    "detector_sql": incident_sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -923,7 +987,7 @@ def detect_billing_discrepancy_signal(
     since = _resolve_since(conn, org_id, since)
     since_date = _since_date(since)
 
-    sql = text(f"""
+    sql_text = f"""
         WITH billed AS (
             SELECT
                 c.{cost.column('id')} AS cost_id,
@@ -990,7 +1054,8 @@ def detect_billing_discrepancy_signal(
         GROUP BY vendor_id, vendor_name
         HAVING COUNT(*) >= :min_flagged_trips AND SUM(trip_cost - calculated_slab_cost) >= :min_discrepancy
         ORDER BY discrepancy_amount DESC
-    """)
+    """
+    sql = text(sql_text)
 
     rows = conn.execute(
         sql,
@@ -1074,6 +1139,7 @@ def detect_billing_discrepancy_signal(
                     "discrepancy_pct_of_vendor_spend": discrepancy_pct_of_vendor_spend,
                     "org_total_billed_fleet_spend_inr": round(total_billed, 2),
                     "org_billing_leakage_rate_pct": leakage_rate_pct,
+                    "detector_sql": sql_text,
                 },
                 org_id=org_id,
                 detected_at=_utcnow(),
@@ -1081,6 +1147,237 @@ def detect_billing_discrepancy_signal(
                 context={"vendor_name": row["vendor_name"]},
             )
         )
+    return signals
+
+
+# ---------------------------------------------------------------------------
+# detect_variability_signal (plan SP-B §B2)
+# ---------------------------------------------------------------------------
+
+DEFAULT_VARIABILITY_CV_THRESHOLD_PCT = 20.0
+DEFAULT_VARIABILITY_MIN_SAMPLE_SIZE = 15
+DEFAULT_VARIABILITY_MINUTES_FLOOR = 10.0
+
+
+@safe_detect
+def detect_variability_signal(
+    conn: Connection,
+    org_id: str,
+    since: datetime | None = None,
+    cv_threshold_pct: float = DEFAULT_VARIABILITY_CV_THRESHOLD_PCT,
+    min_sample_size: int = DEFAULT_VARIABILITY_MIN_SAMPLE_SIZE,
+    variability_minutes_floor: float = DEFAULT_VARIABILITY_MINUTES_FLOOR,
+) -> list[Signal]:
+    """Flags *inconsistency*, not magnitude -- a route/vendor whose average
+    looks fine but whose actual values swing wildly trip-to-trip is its own
+    operational risk (unpredictable for planning, often a leading indicator
+    of a magnitude breach about to happen) and is invisible to every other
+    detector in this file, which all flag "average too high," never "too
+    erratic." Uses the coefficient of variation (stddev / mean, as a %) --
+    the same statistical-band technique `detect_billing_discrepancy_signal`
+    already uses (`percentile_cont`) for a different purpose, no new library.
+
+    Three independent sub-metrics, each requiring `min_sample_size` rows in
+    its group before a CV is trusted (a tiny sample's stddev is noise, not
+    signal -- same "insufficient sample" philosophy every other detector in
+    this file already applies):
+
+    1. On-time/delay consistency, grouped by route. Guarded: when a route's
+       mean delay is close to zero, a ratio blows up for no real reason, so
+       below `abs(mean) < 1.0` minute this compares the raw stddev against
+       `variability_minutes_floor` instead of a ratio.
+    2. Distance/route-adherence consistency, grouped by route -- variance of
+       (traveled_km - planned_km), normalized against the route's own
+       planned_km (a stable denominator, unlike normalizing against the
+       deviation's own mean which can sit near zero).
+    3. Cost consistency, grouped by vendor -- variance of cost_per_km.
+    """
+
+    contract = get_contract()
+    trip = contract.entity("trip")
+    route = contract.entity("route")
+    cost = contract.entity("cost")
+    vendor = contract.entity("vendor")
+    since = _resolve_since(conn, org_id, since)
+    since_date = _since_date(since)
+
+    signals: list[Signal] = []
+
+    # --- sub-metric 1: delay consistency, by route -------------------------
+    delay_sql_text = f"""
+        SELECT
+            t.{trip.column('route_id')} AS route_id,
+            r.{route.column('route_code')} AS route_code,
+            r.{route.column('name')} AS route_name,
+            COUNT(*) AS sample_count,
+            AVG(t.{trip.column('delay_minutes')}) AS avg_delay_minutes,
+            STDDEV_POP(t.{trip.column('delay_minutes')}) AS stddev_delay_minutes
+        FROM {trip.table} t
+        JOIN {route.table} r ON r.{route.column('id')} = t.{trip.column('route_id')}
+        WHERE t.{trip.column('org_id')} = :org_id
+          AND t.{trip.column('trip_date')} >= :since_date
+          AND t.{trip.column('delay_minutes')} IS NOT NULL
+        GROUP BY t.{trip.column('route_id')}, r.{route.column('route_code')}, r.{route.column('name')}
+        HAVING COUNT(*) >= :min_sample_size
+    """
+    for row in conn.execute(
+        text(delay_sql_text), {"org_id": org_id, "since_date": since_date, "min_sample_size": min_sample_size}
+    ).mappings().all():
+        avg_delay = float(row["avg_delay_minutes"] or 0.0)
+        stddev_delay = float(row["stddev_delay_minutes"] or 0.0)
+        if abs(avg_delay) < 1.0:
+            breach = stddev_delay >= variability_minutes_floor
+            cv_pct = None
+        else:
+            cv_pct = round(100.0 * stddev_delay / abs(avg_delay), 2)
+            breach = cv_pct >= cv_threshold_pct
+        if not breach:
+            continue
+        severity = "high" if (cv_pct or 0) >= cv_threshold_pct * 2 else "medium"
+        signals.append(
+            Signal(
+                signal_type="performance_variability",
+                entity_type="route",
+                entity_id=str(row["route_id"]),
+                severity=severity,
+                summary=(
+                    f"Route {row['route_code']} ({row['route_name']})'s on-time performance is highly "
+                    f"inconsistent: mean delay {avg_delay:.1f} min, std-dev {stddev_delay:.1f} min "
+                    + (f"(CV {cv_pct:.0f}%) " if cv_pct is not None else "")
+                    + f"across {row['sample_count']} trips since {since.date()} -- not a magnitude "
+                    "breach, but not predictable either."
+                ),
+                raw_metric={
+                    "metric_name": "delay",
+                    "sample_count": row["sample_count"],
+                    "avg_delay_minutes": round(avg_delay, 2),
+                    "stddev_delay_minutes": round(stddev_delay, 2),
+                    "cv_pct": cv_pct,
+                    "cv_threshold_pct": cv_threshold_pct,
+                    "detector_sql": delay_sql_text,
+                },
+                org_id=org_id,
+                detected_at=_utcnow(),
+                source="detect_variability_signal",
+                context={"route_code": row["route_code"], "route_name": row["route_name"]},
+            )
+        )
+
+    # --- sub-metric 2: distance/route-adherence consistency, by route ------
+    distance_sql_text = f"""
+        SELECT
+            t.{trip.column('route_id')} AS route_id,
+            r.{route.column('route_code')} AS route_code,
+            r.{route.column('name')} AS route_name,
+            COUNT(*) AS sample_count,
+            AVG(t.{trip.column('planned_km')}) AS avg_planned_km,
+            STDDEV_POP(t.{trip.column('traveled_km')} - t.{trip.column('planned_km')}) AS stddev_deviation_km
+        FROM {trip.table} t
+        JOIN {route.table} r ON r.{route.column('id')} = t.{trip.column('route_id')}
+        WHERE t.{trip.column('org_id')} = :org_id
+          AND t.{trip.column('trip_date')} >= :since_date
+          AND t.{trip.column('traveled_km')} IS NOT NULL
+          AND t.{trip.column('planned_km')} IS NOT NULL
+          AND t.{trip.column('planned_km')} > 0
+        GROUP BY t.{trip.column('route_id')}, r.{route.column('route_code')}, r.{route.column('name')}
+        HAVING COUNT(*) >= :min_sample_size
+    """
+    for row in conn.execute(
+        text(distance_sql_text), {"org_id": org_id, "since_date": since_date, "min_sample_size": min_sample_size}
+    ).mappings().all():
+        avg_planned = float(row["avg_planned_km"] or 0.0)
+        stddev_deviation = float(row["stddev_deviation_km"] or 0.0)
+        if avg_planned <= 0:
+            continue
+        cv_pct = round(100.0 * stddev_deviation / avg_planned, 2)
+        if cv_pct < cv_threshold_pct:
+            continue
+        severity = "high" if cv_pct >= cv_threshold_pct * 2 else "medium"
+        signals.append(
+            Signal(
+                signal_type="performance_variability",
+                entity_type="route",
+                entity_id=str(row["route_id"]),
+                severity=severity,
+                summary=(
+                    f"Route {row['route_code']} ({row['route_name']})'s actual distance driven is "
+                    f"inconsistent relative to its planned distance: std-dev of (traveled - planned) "
+                    f"is {stddev_deviation:.1f} km against a {avg_planned:.1f} km planned average "
+                    f"(CV {cv_pct:.0f}%) across {row['sample_count']} trips since {since.date()} -- "
+                    "possible detours, routing instability, or a data integrity issue."
+                ),
+                raw_metric={
+                    "metric_name": "distance",
+                    "sample_count": row["sample_count"],
+                    "avg_planned_km": round(avg_planned, 2),
+                    "stddev_deviation_km": round(stddev_deviation, 2),
+                    "cv_pct": cv_pct,
+                    "cv_threshold_pct": cv_threshold_pct,
+                    "detector_sql": distance_sql_text,
+                },
+                org_id=org_id,
+                detected_at=_utcnow(),
+                source="detect_variability_signal",
+                context={"route_code": row["route_code"], "route_name": row["route_name"]},
+            )
+        )
+
+    # --- sub-metric 3: cost consistency, by vendor --------------------------
+    cost_sql_text = f"""
+        SELECT
+            c.{cost.column('vendor_id')} AS vendor_id,
+            v.{vendor.column('name')} AS vendor_name,
+            COUNT(*) AS sample_count,
+            AVG(c.{cost.column('cost_per_km')}) AS avg_cost_per_km,
+            STDDEV_POP(c.{cost.column('cost_per_km')}) AS stddev_cost_per_km
+        FROM {cost.table} c
+        JOIN {vendor.table} v ON v.{vendor.column('id')} = c.{cost.column('vendor_id')}
+        WHERE c.{cost.column('org_id')} = :org_id
+          AND c.{cost.column('cost_date')} >= :since_date
+          AND c.{cost.column('cost_per_km')} IS NOT NULL
+          AND c.{cost.column('cost_per_km')} > 0
+        GROUP BY c.{cost.column('vendor_id')}, v.{vendor.column('name')}
+        HAVING COUNT(*) >= :min_sample_size
+    """
+    for row in conn.execute(
+        text(cost_sql_text), {"org_id": org_id, "since_date": since_date, "min_sample_size": min_sample_size}
+    ).mappings().all():
+        avg_cost = float(row["avg_cost_per_km"] or 0.0)
+        stddev_cost = float(row["stddev_cost_per_km"] or 0.0)
+        if avg_cost <= 0:
+            continue
+        cv_pct = round(100.0 * stddev_cost / avg_cost, 2)
+        if cv_pct < cv_threshold_pct:
+            continue
+        severity = "high" if cv_pct >= cv_threshold_pct * 2 else "medium"
+        signals.append(
+            Signal(
+                signal_type="performance_variability",
+                entity_type="vendor",
+                entity_id=str(row["vendor_id"]),
+                severity=severity,
+                summary=(
+                    f"Vendor {row['vendor_name']}'s per-km billing is inconsistent trip-to-trip: "
+                    f"mean INR {avg_cost:.2f}/km, std-dev INR {stddev_cost:.2f}/km (CV {cv_pct:.0f}%) "
+                    f"across {row['sample_count']} trips since {since.date()} -- worth an invoice "
+                    "audit even though no single trip crosses the absolute billing-discrepancy threshold."
+                ),
+                raw_metric={
+                    "metric_name": "cost",
+                    "sample_count": row["sample_count"],
+                    "avg_cost_per_km": round(avg_cost, 2),
+                    "stddev_cost_per_km": round(stddev_cost, 2),
+                    "cv_pct": cv_pct,
+                    "cv_threshold_pct": cv_threshold_pct,
+                    "detector_sql": cost_sql_text,
+                },
+                org_id=org_id,
+                detected_at=_utcnow(),
+                source="detect_variability_signal",
+                context={"vendor_name": row["vendor_name"]},
+            )
+        )
+
     return signals
 
 

@@ -7,19 +7,22 @@ import { AppStateProvider, useAppState } from "./state/AppStateContext";
 import { ActivityPage } from "./pages/ActivityPage";
 import { ChatPage } from "./pages/ChatPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { LivePage } from "./pages/LivePage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { OutboxPage } from "./pages/OutboxPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
-type NavView = "dashboard" | "live" | "notifications" | "outbox" | "activity" | "chat";
+// "live" (LivePage) removed from navigation for now -- kept in the codebase
+// (pages/LivePage.tsx untouched) so it can be re-added later without
+// rebuilding it; simply not reachable from the nav bar today.
+type NavView = "dashboard" | "notifications" | "outbox" | "activity" | "chat" | "settings";
 
 const NAV_ITEMS: Array<{ id: NavView; label: string }> = [
   { id: "dashboard", label: "Dashboard" },
-  { id: "live", label: "Live" },
   { id: "notifications", label: "Notifications" },
   { id: "outbox", label: "Outbox" },
-  { id: "activity", label: "Agent Activity" },
+  { id: "activity", label: "Activity Log" },
   { id: "chat", label: "Chat" },
+  { id: "settings", label: "Settings" },
 ];
 
 function AppShell() {
@@ -64,11 +67,11 @@ function AppShell() {
 
       <main className="app-main">
         {view === "dashboard" && <DashboardPage />}
-        {view === "live" && <LivePage />}
         {view === "notifications" && <NotificationsPage />}
         {view === "outbox" && <OutboxPage />}
         {view === "activity" && <ActivityPage />}
         {view === "chat" && <ChatPage />}
+        {view === "settings" && <SettingsPage />}
       </main>
 
       <TraceDrawer />

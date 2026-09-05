@@ -49,12 +49,18 @@ def upsert_notification(
     thread_id: str | None,
     related_entity_type: str | None = None,
     related_entity_id: int | None = None,
+    scheduled_for: Any = None,
 ) -> dict[str, Any]:
     """Insert or update the one `agent_notifications` row for this thread_id.
 
     Without a thread_id (no LangGraph config supplied it), idempotency isn't
     possible -- falls back to a plain insert, which is fine for direct/ad-hoc
     node calls that aren't part of a resumable graph run.
+
+    `scheduled_for` (plan SP-B §3) is only ever set on INSERT, never touched
+    on an UPDATE (a resume-replay of the same thread_id must not silently
+    reschedule an already-decided visibility delay) -- `None` means
+    "immediate," matching every notification written before this plan.
     """
     contract = get_contract().entity("notification")
     table = contract.table
@@ -94,9 +100,9 @@ def upsert_notification(
                 f"INSERT INTO {table} "
                 f"({c('org_id')}, {c('persona')}, {c('scope')}, {c('severity')}, {c('title')}, "
                 f"{c('message')}, {c('related_entity_type')}, {c('related_entity_id')}, "
-                f"{c('status')}, {c('thread_id')}) "
+                f"{c('status')}, {c('thread_id')}, {c('scheduled_for')}) "
                 f"VALUES (:org_id, :persona, :scope, :severity, :title, :message, "
-                f":related_entity_type, :related_entity_id, :status, :thread_id) "
+                f":related_entity_type, :related_entity_id, :status, :thread_id, :scheduled_for) "
                 f"RETURNING {c('id')} AS id"
             ),
             {
@@ -110,9 +116,32 @@ def upsert_notification(
                 "related_entity_id": related_entity_id,
                 "status": status,
                 "thread_id": thread_id,
+                "scheduled_for": scheduled_for,
             },
         ).mappings().first()
         return {"id": row["id"], "status": status, "created": True}
+
+
+def mark_false_positive(engine: Engine, *, notification_id: int, note: str | None) -> None:
+    """Plan SP-B §7's false-positive feedback loop -- a human's judgment that
+    a dispatched alert was wrong, not the gate's own automatic call. Sets
+    `is_false_positive=TRUE` AND transitions `status` to the existing
+    'resolved' value in one UPDATE: false-positive-ness is an orthogonal
+    quality judgment (was the alert even valid?), not a new workflow-
+    lifecycle stage, so it rides on the same CHECK-constrained `status`
+    column rather than needing a new value in it."""
+    contract = get_contract().entity("notification")
+    table = contract.table
+    c = contract.column
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"UPDATE {table} SET {c('is_false_positive')} = TRUE, "
+                f"{c('false_positive_note')} = :note, {c('false_positive_marked_at')} = now(), "
+                f"{c('status')} = 'resolved', {c('updated_at')} = now() WHERE {c('id')} = :id"
+            ),
+            {"note": note, "id": notification_id},
+        )
 
 
 def mark_notification_status(engine: Engine, *, notification_id: int, status: str) -> None:
@@ -233,3 +262,54 @@ def upsert_report(
             },
         ).mappings().first()
         return {"id": row["id"], "created": True}
+
+
+def log_gate_decision(
+    engine: Engine,
+    *,
+    org_id: str,
+    persona: str,
+    signal_type: str,
+    scope: str,
+    entity_id: str | None,
+    severity: str | None,
+    thread_id: str | None,
+    action: str,
+    reason: str,
+    matched_rule: str,
+    confidence: float | None,
+) -> None:
+    """Plain INSERT into gate_decisions (plan SP-B §1c) -- called from
+    supervisor.run_pipeline for EVERY (signal, persona) pair regardless of
+    the gate's action, including `suppress` (which never produces an
+    agent_notifications row, so this table is the only audit trail for it).
+    Never updates an existing row -- each evaluation is its own row, which is
+    exactly what the recurrence/hysteresis and suppression-heartbeat checks
+    in app.graph.reason.gate need to look back over."""
+    contract = get_contract().entity("gate_decision")
+    table = contract.table
+    c = contract.column
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"INSERT INTO {table} "
+                f"({c('org_id')}, {c('persona')}, {c('signal_type')}, {c('scope')}, "
+                f"{c('entity_id')}, {c('severity')}, {c('action')}, {c('reason')}, "
+                f"{c('matched_rule')}, {c('confidence')}, {c('thread_id')}) "
+                f"VALUES (:org_id, :persona, :signal_type, :scope, :entity_id, :severity, "
+                f":action, :reason, :matched_rule, :confidence, :thread_id)"
+            ),
+            {
+                "org_id": org_id,
+                "persona": persona,
+                "signal_type": signal_type,
+                "scope": scope,
+                "entity_id": entity_id,
+                "severity": severity,
+                "action": action,
+                "reason": reason,
+                "matched_rule": matched_rule,
+                "confidence": confidence,
+                "thread_id": thread_id,
+            },
+        )

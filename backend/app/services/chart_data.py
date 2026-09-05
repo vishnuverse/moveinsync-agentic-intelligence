@@ -21,9 +21,27 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.contracts import get_contract
+from app.services.date_window import dense_anchor_date
 
-DELAY_BREACH_MINUTES = 15.0
+# SP-B (plan §2d): this used to be a second, independent hardcoded copy of
+# sense/nodes.py's DEFAULT_DELAY_BREACH_MINUTES -- a Settings-page change to
+# the delay_breach threshold would silently leave every chart still drawing
+# its breach line at 15 minutes while the detector itself used the new
+# value. DEFAULT_DELAY_BREACH_MINUTES is now the fallback default only;
+# _resolve_delay_breach_minutes() below reads the same `alert_rules` row the
+# detector reads (via the same 30s-TTL-cached loader), so charts and
+# detectors can never disagree again.
+DEFAULT_DELAY_BREACH_MINUTES = 15.0
 NODELAY_LABEL = "NODELAY"
+
+
+def _resolve_delay_breach_minutes(engine: Engine, org_id: str) -> float:
+    from app.rules import get_rules
+
+    rules = get_rules(engine, org_id).get("delay_breach")
+    if rules is None:
+        return DEFAULT_DELAY_BREACH_MINUTES
+    return float(rules.get("delay_threshold_minutes", DEFAULT_DELAY_BREACH_MINUTES))
 
 
 def _delay_expr(trip_alias: str, trip: Any) -> str:
@@ -34,10 +52,11 @@ def _delay_expr(trip_alias: str, trip: Any) -> str:
 
 
 def _max_date(conn, table: str, date_col: str, org_id: str, org_col: str) -> date | None:
-    return conn.execute(
-        text(f"SELECT MAX({date_col}) FROM {table} WHERE {org_col} = :org_id"),
-        {"org_id": org_id},
-    ).scalar()
+    """BUGFIX: was a literal MAX(date) -- broke once a sparse live-replay
+    trickle became every org's newest row, landing every "last N days"
+    window in the empty gap before it (see date_window.py's docstring).
+    Now anchors on the most recent date with real volume instead."""
+    return dense_anchor_date(conn, table, date_col, org_id, org_col)
 
 
 # `sustainability_targets` is a fixed reference/infra table, referenced by its
@@ -64,7 +83,9 @@ def _benchmark(conn, org_id: str, metric_name: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
-def ota_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]:
+def ota_trend(
+    engine: Engine, org_id: str, days: int = 45, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
     """Daily on-time-arrival rate: PRD F4/§5 -- on-time = actual_time within
     the 15-minute breach threshold (same threshold detect_delay_signal uses).
 
@@ -72,15 +93,24 @@ def ota_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]:
     92% breach floor) and a vs-previous-window comparison, so the chart reads
     as "78% against a 95% target, two vendors behind it" rather than a bare
     trend line -- the same "context, not just a number" bar the metric cards
-    already clear (dashboard_cards.py's context_note)."""
+    already clear (dashboard_cards.py's context_note).
+
+    `since`/`until` (plan: sliding date-range picker) override the
+    days-back-from-anchor default entirely -- when given, they ARE the
+    window, and the "vs previous period" comparison mirrors that same
+    window's length immediately before it."""
     contract = get_contract()
     trip = contract.entity("trip")
+    breach_minutes = _resolve_delay_breach_minutes(engine, org_id)
     with engine.begin() as conn:
-        anchor = _max_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
-        if anchor is None:
-            return {"categories": [], "series": [{"name": "On-Time Arrival %", "data": []}]}
-        since = anchor - timedelta(days=days)
-        prev_since = anchor - timedelta(days=2 * days)
+        if until is not None:
+            anchor = until
+        else:
+            anchor = _max_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
+            if anchor is None:
+                return {"categories": [], "series": [{"name": "On-Time Arrival %", "data": []}]}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+        prev_since = window_since - (anchor - window_since)
         rows = conn.execute(
             text(f"""
                 SELECT t.{trip.column('trip_date')} AS d,
@@ -92,10 +122,11 @@ def ota_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]:
                   AND t.{trip.column('actual_time')} IS NOT NULL
                   AND t.{trip.column('scheduled_time')} IS NOT NULL
                   AND t.{trip.column('trip_date')} > :since
+                  AND t.{trip.column('trip_date')} <= :until
                 GROUP BY t.{trip.column('trip_date')}
                 ORDER BY t.{trip.column('trip_date')}
             """),
-            {"org_id": org_id, "since": since, "breach": DELAY_BREACH_MINUTES},
+            {"org_id": org_id, "since": window_since, "until": anchor, "breach": breach_minutes},
         ).mappings().all()
 
         prev_row = conn.execute(
@@ -110,7 +141,7 @@ def ota_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]:
                   AND t.{trip.column('trip_date')} > :prev_since
                   AND t.{trip.column('trip_date')} <= :since
             """),
-            {"org_id": org_id, "prev_since": prev_since, "since": since, "breach": DELAY_BREACH_MINUTES},
+            {"org_id": org_id, "prev_since": prev_since, "since": window_since, "breach": breach_minutes},
         ).mappings().first()
 
         benchmark = _benchmark(conn, org_id, "sla_timeliness_pct")
@@ -137,17 +168,22 @@ def ota_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]:
     return result
 
 
-def delay_reason_breakdown(engine: Engine, org_id: str, days: int = 90) -> dict[str, Any]:
+def delay_reason_breakdown(
+    engine: Engine, org_id: str, days: int = 90, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
     """PRD F4/§5 delay-reason breakdown (TRAFFIC/DRIVER/EMPLOYEE/...), with
     completed trips carrying no delay_reason bucketed as NODELAY."""
     contract = get_contract()
     trip = contract.entity("trip")
     with engine.begin() as conn:
-        anchor = _max_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
-        if anchor is None:
-            return {"categories": [], "series": [{"name": "Trips", "data": []}]}
-        since = anchor - timedelta(days=days)
-        prev_since = anchor - timedelta(days=2 * days)
+        if until is not None:
+            anchor = until
+        else:
+            anchor = _max_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
+            if anchor is None:
+                return {"categories": [], "series": [{"name": "Trips", "data": []}]}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+        prev_since = window_since - (anchor - window_since)
         rows = conn.execute(
             text(f"""
                 SELECT COALESCE(NULLIF(UPPER(TRIM(t.{trip.column('delay_reason')})), ''), :nodelay) AS reason,
@@ -156,11 +192,12 @@ def delay_reason_breakdown(engine: Engine, org_id: str, days: int = 90) -> dict[
                 WHERE t.{trip.column('org_id')} = :org_id
                   AND t.{trip.column('status')} = 'completed'
                   AND t.{trip.column('trip_date')} > :since
+                  AND t.{trip.column('trip_date')} <= :until
                 GROUP BY reason
                 ORDER BY cnt DESC
                 LIMIT 8
             """),
-            {"org_id": org_id, "since": since, "nodelay": NODELAY_LABEL},
+            {"org_id": org_id, "since": window_since, "until": anchor, "nodelay": NODELAY_LABEL},
         ).mappings().all()
 
         prev_total = conn.execute(
@@ -174,7 +211,7 @@ def delay_reason_breakdown(engine: Engine, org_id: str, days: int = 90) -> dict[
                   AND t.{trip.column('trip_date')} > :prev_since
                   AND t.{trip.column('trip_date')} <= :since
             """),
-            {"org_id": org_id, "prev_since": prev_since, "since": since},
+            {"org_id": org_id, "prev_since": prev_since, "since": window_since},
         ).scalar() or 0
 
     result: dict[str, Any] = {
@@ -193,16 +230,21 @@ def delay_reason_breakdown(engine: Engine, org_id: str, days: int = 90) -> dict[
     return result
 
 
-def no_show_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]:
+def no_show_trend(
+    engine: Engine, org_id: str, days: int = 45, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
     """PRD F3 team no-show rate trend (Line Manager)."""
     contract = get_contract()
     commute = contract.entity("commute")
     with engine.begin() as conn:
-        anchor = _max_date(conn, commute.table, commute.column("log_date"), org_id, commute.column("org_id"))
-        if anchor is None:
-            return {"categories": [], "series": [{"name": "No-Show Rate %", "data": []}]}
-        since = anchor - timedelta(days=days)
-        prev_since = anchor - timedelta(days=2 * days)
+        if until is not None:
+            anchor = until
+        else:
+            anchor = _max_date(conn, commute.table, commute.column("log_date"), org_id, commute.column("org_id"))
+            if anchor is None:
+                return {"categories": [], "series": [{"name": "No-Show Rate %", "data": []}]}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+        prev_since = window_since - (anchor - window_since)
         rows = conn.execute(
             text(f"""
                 SELECT c.{commute.column('log_date')} AS d,
@@ -211,10 +253,11 @@ def no_show_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]
                 FROM {commute.table} c
                 WHERE c.{commute.column('org_id')} = :org_id
                   AND c.{commute.column('log_date')} > :since
+                  AND c.{commute.column('log_date')} <= :until
                 GROUP BY c.{commute.column('log_date')}
                 ORDER BY c.{commute.column('log_date')}
             """),
-            {"org_id": org_id, "since": since},
+            {"org_id": org_id, "since": window_since, "until": anchor},
         ).mappings().all()
 
         prev_row = conn.execute(
@@ -226,7 +269,7 @@ def no_show_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]
                   AND c.{commute.column('log_date')} > :prev_since
                   AND c.{commute.column('log_date')} <= :since
             """),
-            {"org_id": org_id, "prev_since": prev_since, "since": since},
+            {"org_id": org_id, "prev_since": prev_since, "since": window_since},
         ).mappings().first()
 
     categories = [row["d"].isoformat() for row in rows]
@@ -247,25 +290,40 @@ def no_show_trend(engine: Engine, org_id: str, days: int = 45) -> dict[str, Any]
     return result
 
 
-def absence_split(engine: Engine, org_id: str, days: int = 90) -> dict[str, Any]:
+def absence_split(
+    engine: Engine, org_id: str, days: int = 90, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
     """PRD F3 delay-caused vs. employee-caused no-show split -- mirrors
     detect_attendance_correlation's own transport-correlation test exactly
-    (mode='shuttle' AND delay past the same 15-min breach threshold), applied
-    here to no-show legs instead of late-clock-in legs."""
+    (mode IN ('shuttle','cab') AND delay past the same breach threshold),
+    applied here to no-show legs instead of late-clock-in legs."""
     contract = get_contract()
     commute = contract.entity("commute")
     trip = contract.entity("trip")
+    breach_minutes = _resolve_delay_breach_minutes(engine, org_id)
     with engine.begin() as conn:
-        anchor = _max_date(conn, commute.table, commute.column("log_date"), org_id, commute.column("org_id"))
-        if anchor is None:
-            return {"series": [{"name": "No-Shows", "data": []}]}
-        since = anchor - timedelta(days=days)
+        if until is not None:
+            anchor = until
+        else:
+            anchor = _max_date(conn, commute.table, commute.column("log_date"), org_id, commute.column("org_id"))
+            if anchor is None:
+                return {"series": [{"name": "No-Shows", "data": []}]}
+        window_since = since if since is not None else anchor - timedelta(days=days)
         row = conn.execute(
             text(f"""
                 SELECT
                     COUNT(*) AS total_no_shows,
                     COUNT(*) FILTER (
-                        WHERE c.{commute.column('mode')} = 'shuttle'
+                        -- BUGFIX: verified live some orgs' no-shows are 100%
+                        -- mode='cab' with zero 'shuttle' rows (e.g.
+                        -- vanta-Aus) -- a bare `mode = 'shuttle'` filter
+                        -- silently zeroed "Delay-Caused" on the Line
+                        -- Manager's Team Commute Overview chart for those
+                        -- orgs regardless of real delay data. Both real
+                        -- mis.commute.mode values are company-provided
+                        -- transport, so both belong here -- same fix as
+                        -- sense/nodes.py::detect_attendance_correlation.
+                        WHERE c.{commute.column('mode')} IN ('shuttle', 'cab')
                           AND t.{trip.column('actual_time')} IS NOT NULL
                           AND t.{trip.column('scheduled_time')} IS NOT NULL
                           AND {_delay_expr('t', trip)} > :breach
@@ -275,8 +333,9 @@ def absence_split(engine: Engine, org_id: str, days: int = 90) -> dict[str, Any]
                 WHERE c.{commute.column('org_id')} = :org_id
                   AND c.{commute.column('is_no_show')} = TRUE
                   AND c.{commute.column('log_date')} > :since
+                  AND c.{commute.column('log_date')} <= :until
             """),
-            {"org_id": org_id, "since": since, "breach": DELAY_BREACH_MINUTES},
+            {"org_id": org_id, "since": window_since, "until": anchor, "breach": breach_minutes},
         ).mappings().first()
 
     total = int(row["total_no_shows"] or 0)
@@ -295,7 +354,15 @@ def absence_split(engine: Engine, org_id: str, days: int = 90) -> dict[str, Any]
     }
 
 
-def billing_discrepancy(engine: Engine, org_id: str, months: int = 6, top_n: int = 4) -> dict[str, Any]:
+def billing_discrepancy(
+    engine: Engine,
+    org_id: str,
+    months: int = 6,
+    top_n: int = 4,
+    *,
+    since: date | None = None,
+    until: date | None = None,
+) -> dict[str, Any]:
     """PRD F2: billed distance (bill_data.total_trip_km, contract: cost.distance_km)
     vs. actual GPS distance (ride_data_trip.traveled_km, contract:
     trip.traveled_km), monetised at the rate actually billed
@@ -313,10 +380,13 @@ def billing_discrepancy(engine: Engine, org_id: str, months: int = 6, top_n: int
     trip = contract.entity("trip")
     vendor = contract.entity("vendor")
     with engine.begin() as conn:
-        anchor = _max_date(conn, cost.table, cost.column("cost_date"), org_id, cost.column("org_id"))
-        if anchor is None:
-            return {"categories": [], "series": [{"name": "Billing Discrepancy (₹)", "data": []}]}
-        since = anchor - timedelta(days=months * 31)
+        if until is not None:
+            anchor = until
+        else:
+            anchor = _max_date(conn, cost.table, cost.column("cost_date"), org_id, cost.column("org_id"))
+            if anchor is None:
+                return {"categories": [], "series": [{"name": "Billing Discrepancy (₹)", "data": []}]}
+        window_since = since if since is not None else anchor - timedelta(days=months * 31)
         rows = conn.execute(
             text(f"""
                 SELECT date_trunc('month', c.{cost.column('cost_date')})::date AS m,
@@ -328,13 +398,14 @@ def billing_discrepancy(engine: Engine, org_id: str, months: int = 6, top_n: int
                 LEFT JOIN {vendor.table} v ON v.{vendor.column('id')} = c.{cost.column('vendor_id')}
                 WHERE c.{cost.column('org_id')} = :org_id
                   AND c.{cost.column('cost_date')} > :since
+                  AND c.{cost.column('cost_date')} <= :until
                   AND c.{cost.column('distance_km')} IS NOT NULL
                   AND t.{trip.column('traveled_km')} IS NOT NULL
                   AND c.{cost.column('cost_per_km')} IS NOT NULL
                 GROUP BY m, v.{vendor.column('name')}
                 ORDER BY m
             """),
-            {"org_id": org_id, "since": since},
+            {"org_id": org_id, "since": window_since, "until": anchor},
         ).mappings().all()
 
     months_list: list[date] = sorted({row["m"] for row in rows})
@@ -383,7 +454,9 @@ def billing_discrepancy(engine: Engine, org_id: str, months: int = 6, top_n: int
     return {"categories": categories, "series": series, "contributors": contributors}
 
 
-def emissions_by_fuel(engine: Engine, org_id: str, days: int = 90) -> dict[str, Any]:
+def emissions_by_fuel(
+    engine: Engine, org_id: str, days: int = 90, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
     """PRD F5: weekly CO2 (tonnes) stacked by actual_cab_fuel_type (Diesel/
     Petrol/Electric), using the emission coefficients already baked into
     mis.emission.co2_grams at ingestion time (170/150/0 gCO2/km per the PRD).
@@ -398,10 +471,13 @@ def emissions_by_fuel(engine: Engine, org_id: str, days: int = 90) -> dict[str, 
     contract = get_contract()
     emission = contract.entity("emission")
     with engine.begin() as conn:
-        anchor = _max_date(conn, emission.table, emission.column("log_date"), org_id, emission.column("org_id"))
-        if anchor is None:
-            return {"categories": [], "series": []}
-        since = anchor - timedelta(days=days)
+        if until is not None:
+            anchor = until
+        else:
+            anchor = _max_date(conn, emission.table, emission.column("log_date"), org_id, emission.column("org_id"))
+            if anchor is None:
+                return {"categories": [], "series": []}
+        window_since = since if since is not None else anchor - timedelta(days=days)
         rows = conn.execute(
             text(f"""
                 SELECT date_trunc('week', e.{emission.column('log_date')})::date AS wk,
@@ -410,11 +486,12 @@ def emissions_by_fuel(engine: Engine, org_id: str, days: int = 90) -> dict[str, 
                 FROM {emission.table} e
                 WHERE e.{emission.column('org_id')} = :org_id
                   AND e.{emission.column('log_date')} > :since
+                  AND e.{emission.column('log_date')} <= :until
                   AND e.{emission.column('fuel_type')} IS NOT NULL
                 GROUP BY wk, fuel
                 ORDER BY wk
             """),
-            {"org_id": org_id, "since": since},
+            {"org_id": org_id, "since": window_since, "until": anchor},
         ).mappings().all()
 
         rate_row = conn.execute(
@@ -423,9 +500,10 @@ def emissions_by_fuel(engine: Engine, org_id: str, days: int = 90) -> dict[str, 
                 FROM {emission.table} e
                 WHERE e.{emission.column('org_id')} = :org_id
                   AND e.{emission.column('log_date')} > :since
+                  AND e.{emission.column('log_date')} <= :until
                   AND e.{emission.column('co2_per_passenger_km')} IS NOT NULL
             """),
-            {"org_id": org_id, "since": since},
+            {"org_id": org_id, "since": window_since, "until": anchor},
         ).mappings().first()
 
         benchmark = _benchmark(conn, org_id, "carbon_gco2_per_passenger_km")
@@ -457,7 +535,15 @@ def emissions_by_fuel(engine: Engine, org_id: str, days: int = 90) -> dict[str, 
     return result
 
 
-def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 12) -> dict[str, Any]:
+def vendor_scorecard(
+    engine: Engine,
+    org_id: str,
+    days: int = 90,
+    limit: int = 12,
+    *,
+    since: date | None = None,
+    until: date | None = None,
+) -> dict[str, Any]:
     """PRD TH1: SLA% / cost-per-km / incident count per vendor, plus a
     weekly on-time-rate sparkline. sla_target_pct and cost_per_km are the
     observed values computed once at ingestion (see mis_schema.sql); the
@@ -467,14 +553,20 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
     route = contract.entity("route")
     incident = contract.entity("incident")
     trip = contract.entity("trip")
+    breach_minutes = _resolve_delay_breach_minutes(engine, org_id)
 
     with engine.begin() as conn:
-        anchor = _max_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
+        anchor = until if until is not None else _max_date(
+            conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id")
+        )
         # A concrete sentinel (rather than a NULL bind + "::date IS NULL"
         # check) sidesteps a SQLAlchemy text() parsing quirk where a bind
         # param immediately followed by a "::cast" and reused later in the
         # same statement doesn't get substituted correctly.
-        since = anchor - timedelta(days=days) if anchor else date(1970, 1, 1)
+        if anchor is None:
+            since = date(1970, 1, 1)
+        else:
+            since = since if since is not None else anchor - timedelta(days=days)
 
         main_rows = conn.execute(
             text(f"""
@@ -488,12 +580,13 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
                 LEFT JOIN {incident.table} i ON i.{incident.column('route_id')} = r.{route.column('id')}
                     AND i.{incident.column('org_id')} = :org_id
                     AND i.{incident.column('occurred_at')} > :since
+                    AND i.{incident.column('occurred_at')} <= :until_bound
                 WHERE v.{vendor.column('org_id')} = :org_id
                 GROUP BY v.{vendor.column('id')}, v.{vendor.column('name')}, v.{vendor.column('sla_target_pct')}, v.{vendor.column('cost_per_km')}
                 ORDER BY v.{vendor.column('sla_target_pct')} DESC NULLS LAST
                 LIMIT :limit
             """),
-            {"org_id": org_id, "since": since, "limit": limit},
+            {"org_id": org_id, "since": since, "until_bound": anchor or date(2999, 1, 1), "limit": limit},
         ).mappings().all()
 
         vendor_ids = [row["vendor_id"] for row in main_rows]
@@ -512,6 +605,7 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
                       AND t.{trip.column('actual_time')} IS NOT NULL
                       AND t.{trip.column('scheduled_time')} IS NOT NULL
                       AND t.{trip.column('trip_date')} > :since
+                      AND t.{trip.column('trip_date')} <= :until_bound
                       AND r.{route.column('vendor_id')} = ANY(:vendor_ids)
                     GROUP BY r.{route.column('vendor_id')}, wk
                     ORDER BY r.{route.column('vendor_id')}, wk
@@ -519,7 +613,8 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
                 {
                     "org_id": org_id,
                     "since": since,
-                    "breach": DELAY_BREACH_MINUTES,
+                    "until_bound": anchor,
+                    "breach": breach_minutes,
                     "vendor_ids": vendor_ids,
                 },
             ).mappings().all()
@@ -549,6 +644,7 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
                       AND t.{trip.column('actual_time')} IS NOT NULL
                       AND t.{trip.column('scheduled_time')} IS NOT NULL
                       AND t.{trip.column('trip_date')} > :prev_since
+                      AND t.{trip.column('trip_date')} <= :until_bound
                       AND r.{route.column('vendor_id')} = ANY(:vendor_ids)
                     GROUP BY r.{route.column('vendor_id')}, is_current
                 """),
@@ -556,7 +652,8 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
                     "org_id": org_id,
                     "prev_since": prev_since,
                     "since": since,
-                    "breach": DELAY_BREACH_MINUTES,
+                    "until_bound": anchor,
+                    "breach": breach_minutes,
                     "vendor_ids": vendor_ids,
                 },
             ).mappings().all()
@@ -579,3 +676,95 @@ def vendor_scorecard(engine: Engine, org_id: str, days: int = 90, limit: int = 1
         for row in main_rows
     ]
     return {"vendors": vendors}
+
+
+def signal_gate_funnel(engine: Engine, org_id: str, days: int = 30) -> dict[str, Any]:
+    """SP-B §5/§6: daily count of suppress/rule_only/escalate gate decisions,
+    stacked -- reuses BreakdownBarChart's existing `stacked` mode (already
+    used for the per-vendor billing-discrepancy stack above), same pivot
+    pattern emissions_by_fuel uses for its fuel-type stack."""
+    gd = get_contract().entity("gate_decision")
+    c = gd.column
+    with engine.begin() as conn:
+        anchor = conn.execute(
+            text(f"SELECT MAX({c('created_at')})::date FROM {gd.table} WHERE {c('org_id')} = :org_id"),
+            {"org_id": org_id},
+        ).scalar()
+        if anchor is None:
+            return {"categories": [], "series": []}
+        since = anchor - timedelta(days=days)
+        rows = conn.execute(
+            text(f"""
+                SELECT {c('created_at')}::date AS d, {c('action')} AS action, COUNT(*) AS n
+                FROM {gd.table}
+                WHERE {c('org_id')} = :org_id AND {c('created_at')}::date > :since
+                GROUP BY d, action
+                ORDER BY d
+            """),
+            {"org_id": org_id, "since": since},
+        ).mappings().all()
+
+    dates = sorted({row["d"] for row in rows})
+    categories = [d.isoformat() for d in dates]
+    by_action_date: dict[tuple[str, date], int] = {}
+    for row in rows:
+        by_action_date[(row["action"], row["d"])] = int(row["n"])
+
+    series = [
+        {
+            "name": label,
+            "data": [by_action_date.get((action, d), 0) for d in dates],
+        }
+        for action, label in (("suppress", "Suppressed"), ("rule_only", "Rule-Only"), ("escalate", "Escalated"))
+    ]
+    return {"categories": categories, "series": series}
+
+
+def llm_call_volume(engine: Engine, org_id: str, *, provider: str, redis_url: str, days: int = 14) -> dict[str, Any]:
+    """SP-B §5/§6: reuses TrendLineChart's existing `target`/`breach_threshold`
+    fields (already designed for exactly "actual vs. a line") for "daily LLM
+    calls vs. LLM_DAILY_CALL_LIMIT". Redis only retains each day's key for
+    ~26h (see app/llm/provider.py's _DAILY_KEY_TTL_SECONDS), so this combines
+    today's live Redis count with a `gate_decisions`-derived historical
+    `escalate` count (every escalate IS one LLM call) for real trend depth --
+    documented honestly rather than faking multi-day Redis history that
+    doesn't exist."""
+    import os
+    from datetime import timedelta as _td
+
+    gd = get_contract().entity("gate_decision")
+    c = gd.column
+    with engine.begin() as conn:
+        anchor = conn.execute(
+            text(f"SELECT MAX({c('created_at')})::date FROM {gd.table} WHERE {c('org_id')} = :org_id"),
+            {"org_id": org_id},
+        ).scalar()
+        since = (anchor - _td(days=days)) if anchor else (date.today() - _td(days=days))
+        rows = conn.execute(
+            text(f"""
+                SELECT {c('created_at')}::date AS d, COUNT(*) AS n
+                FROM {gd.table}
+                WHERE {c('org_id')} = :org_id AND {c('action')} = 'escalate'
+                  AND {c('created_at')}::date > :since
+                GROUP BY d ORDER BY d
+            """),
+            {"org_id": org_id, "since": since},
+        ).mappings().all()
+
+    counts_by_date = {row["d"].isoformat(): int(row["n"]) for row in rows}
+    today = date.today()
+    categories = [(since + _td(days=i)).isoformat() for i in range((today - since).days + 1)]
+
+    from app.llm.provider import get_daily_call_count
+
+    live_count = get_daily_call_count(provider, redis_url)
+
+    data = [live_count if cat == today.isoformat() else counts_by_date.get(cat, 0) for cat in categories]
+
+    daily_limit = int(os.environ.get("LLM_DAILY_CALL_LIMIT", "500"))
+    return {
+        "categories": categories,
+        "series": [{"name": "LLM calls (escalate-derived history + live today)", "data": data}],
+        "breach_threshold": float(daily_limit),
+        "target_label": "Daily budget",
+    }

@@ -16,9 +16,14 @@ from app.api.deps import default_org_id
 from app.api.schemas import DataCoverage
 from app.contracts import get_contract
 from app.graph.act.db import get_engine
+from app.services.date_window import dense_anchor_date
 from sqlalchemy import text
 
 router = APIRouter(tags=["meta"])
+
+
+def _iso(value) -> str | None:
+    return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
 
 
 @router.get("/data-coverage", response_model=DataCoverage)
@@ -36,11 +41,13 @@ def data_coverage(org_id: str | None = Query(default=None)) -> DataCoverage:
             ),
             {"org_id": resolved_org},
         ).mappings().first()
+        dense_end = dense_anchor_date(conn, trip.table, c("trip_date"), resolved_org, c("org_id"))
 
     start = row["start_date"] if row else None
     end = row["end_date"] if row else None
     return DataCoverage(
-        start_date=start.isoformat() if hasattr(start, "isoformat") else (str(start) if start else None),
-        end_date=end.isoformat() if hasattr(end, "isoformat") else (str(end) if end else None),
+        start_date=_iso(start),
+        end_date=_iso(end),
         trip_count=int(row["trip_count"]) if row and row["trip_count"] is not None else 0,
+        dense_end_date=_iso(dense_end),
     )

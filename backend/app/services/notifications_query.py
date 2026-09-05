@@ -55,9 +55,15 @@ def list_notifications(
             text(
                 f"SELECT {c('id')} AS id, {c('severity')} AS severity, {c('title')} AS title, "
                 f"{c('message')} AS message, {c('status')} AS status, {c('thread_id')} AS thread_id, "
-                f"{c('scope')} AS scope, {c('created_at')} AS created_at "
+                f"{c('scope')} AS scope, {c('created_at')} AS created_at, "
+                f"{c('is_false_positive')} AS is_false_positive "
                 f"FROM {table} WHERE {c('org_id')} = :org_id AND {c('persona')} = :persona "
                 f"AND {c('scope')} != 'chat' "
+                # SP-B (plan §3): a non-NULL scheduled_for is a visibility
+                # delay, not a second copy of the row -- this is the one-line
+                # change that makes notification_cadence real. NULL (today's
+                # existing rows, and every "immediate" one) is always visible.
+                f"AND ({c('scheduled_for')} IS NULL OR {c('scheduled_for')} <= now()) "
                 f"ORDER BY {c('created_at')} DESC LIMIT :limit OFFSET :offset"
             ),
             {"org_id": org_id, "persona": persona, "limit": limit, "offset": offset},
@@ -79,7 +85,8 @@ def count_notifications(org_id: str, persona: str) -> int:
             text(
                 f"SELECT COUNT(*) FROM {table} "
                 f"WHERE {c('org_id')} = :org_id AND {c('persona')} = :persona "
-                f"AND {c('scope')} != 'chat'"
+                f"AND {c('scope')} != 'chat' "
+                f"AND ({c('scheduled_for')} IS NULL OR {c('scheduled_for')} <= now())"
             ),
             {"org_id": org_id, "persona": persona},
         ).scalar()

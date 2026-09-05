@@ -30,8 +30,55 @@ _DETECTOR_NAMES = (
     "detect_attendance_correlation",
     "detect_escort_compliance_signal",
     "detect_billing_discrepancy_signal",
+    "detect_variability_signal",
     "flag_data_quality",
 )
+
+# SP-B (plan §2c): maps each detector's own kwarg names to the `alert_rules`
+# signal_type whose `params` blob can override them, so
+# `_make_detector_node` below can resolve config-driven thresholds without
+# any detector function itself changing its (pure, testable) signature
+# beyond the small additive params already added in nodes.py. A detector not
+# listed here (flag_data_quality) is never rules-driven -- it always runs
+# with its defaults.
+_DETECTOR_KWARGS: dict[str, tuple[str, ...]] = {
+    "detect_delay_signal": ("delay_threshold_minutes",),
+    "detect_incident_signal": ("severity_threshold",),
+    "detect_cost_anomaly": ("divergence_pct",),
+    "detect_emissions_signal": ("min_ratio_over_baseline",),
+    "detect_attendance_correlation": (
+        "delay_threshold_minutes",
+        "min_late_samples",
+        "signal_limit",
+        "transport_correlation_ratio",
+        "unrelated_correlation_ratio",
+    ),
+    "detect_escort_compliance_signal": (
+        "violation_limit",
+        "night_window_start_hour",
+        "night_window_end_hour",
+        "drop_delay_critical_minutes",
+    ),
+    "detect_billing_discrepancy_signal": ("min_slab_sample", "min_discrepancy_inr"),
+    "detect_variability_signal": ("cv_threshold_pct", "min_sample_size", "variability_minutes_floor"),
+}
+_RULES_KEY_BY_DETECTOR: dict[str, str] = {
+    "detect_delay_signal": "delay_breach",
+    "detect_incident_signal": "incident",
+    "detect_cost_anomaly": "cost_divergence",
+    "detect_emissions_signal": "emissions_over_target",
+    # SP-B fix: was the phantom key "attendance_correlation" -- no Signal is
+    # ever emitted with that signal_type, so gate.py's per-signal rules
+    # lookup (keyed on the real Signal.signal_type) could never see these
+    # params' gate_mode/cadence, and the Settings page rendered a 3rd,
+    # functionally-dead card alongside the two real ones. Using the actual
+    # dispatched signal_type as the params key matches every other detector
+    # here (e.g. "delay_breach" is both the params key and a real signal_type).
+    "detect_attendance_correlation": "attendance_correlated_with_transport",
+    "detect_escort_compliance_signal": "escort_compliance_violation",
+    "detect_billing_discrepancy_signal": "billing_discrepancy",
+    "detect_variability_signal": "performance_variability",
+}
 
 
 def poll_or_event_entry(state: SenseState) -> dict:
@@ -79,14 +126,32 @@ def _real_data_available(conn) -> bool:
 
 def _make_detector_node(detector_name: str, engine: Engine):
     detector_fn = getattr(detectors, detector_name)
+    expected_kwargs = _DETECTOR_KWARGS.get(detector_name, ())
+    rules_key = _RULES_KEY_BY_DETECTOR.get(detector_name)
 
     def node(state: SenseState) -> dict:
         org_id = state["org_id"]
         since = state.get("since")
+        kwargs: dict = {}
+        if rules_key and expected_kwargs:
+            # SP-B (plan §2c): resolved once per detector node per tick (the
+            # loader itself caches per-org for 30s, so this is cheap even
+            # across the 8 parallel detector branches). Only non-None
+            # overrides are passed -- everything else falls through to the
+            # detector's own DEFAULT_* argument default, unchanged.
+            from app.rules import get_rules
+
+            signal_rules = get_rules(engine, org_id).get(rules_key)
+            if signal_rules is not None:
+                kwargs = {
+                    key: signal_rules.get(key)
+                    for key in expected_kwargs
+                    if signal_rules.get(key) is not None
+                }
         with engine.connect() as conn:
             if not _real_data_available(conn):
                 return {"signals": []}
-            signals = detector_fn(conn, org_id, since)
+            signals = detector_fn(conn, org_id, since, **kwargs)
         return {"signals": signals}
 
     node.__name__ = detector_name

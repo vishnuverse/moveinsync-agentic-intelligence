@@ -17,7 +17,9 @@ MetricSeverity = Literal["good", "warning", "critical", "neutral"]
 MetricTrend = Literal["up", "down", "flat"]
 NotificationSeverity = Literal["info", "warning", "critical"]
 NotificationStatus = Literal["open", "acked", "needs-intervention"]
-TraceStepType = Literal["signal_detected", "sql_generated", "sql_executed", "context_built", "decision"]
+TraceStepType = Literal[
+    "signal_detected", "gate_decision", "sql_generated", "sql_executed", "context_built", "decision"
+]
 ActivityTrigger = Literal["schedule", "event"]
 
 
@@ -44,6 +46,11 @@ class NotificationItem(BaseModel):
     status: NotificationStatus
     thread_id: str
     created_at: str
+    is_false_positive: bool = False
+
+
+class MarkFalsePositiveRequest(BaseModel):
+    note: Optional[str] = None
 
 
 class NotificationListResponse(BaseModel):
@@ -72,6 +79,11 @@ class TraceStep(BaseModel):
     sql: Optional[str] = None
     retry_count: Optional[int] = None
     timestamp: str
+    # plan SP-B §9a: populated only on the "decision" step, when the
+    # decision carries a recommendation -- lets the frontend render a
+    # visually distinct "Recommended Action" block instead of re-parsing it
+    # out of `detail`.
+    recommendation: Optional[str] = None
 
 
 class ReportMeta(BaseModel):
@@ -184,6 +196,13 @@ class DataCoverage(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     trip_count: int
+    # `dense_end_date`: the most recent date with substantial trip volume --
+    # distinct from `end_date` (the literal MAX(trip_date), which can be a
+    # sparse, disconnected live-replay tail day). The date-range picker uses
+    # this, not `end_date`, as the default window's end so first-load always
+    # shows meaningful data; `start_date`/`end_date` remain the picker's
+    # outer slider bounds, so a viewer can still manually reach the live tail.
+    dense_end_date: Optional[str] = None
 
 
 class ErrorBody(BaseModel):
@@ -227,3 +246,95 @@ class VendorScorecardEntry(BaseModel):
 
 class VendorScorecardData(BaseModel):
     vendors: list[VendorScorecardEntry]
+
+
+# ---------------------------------------------------------------------------
+# SP-B Settings page (plan §4): GET/PUT /api/settings/rules, GET /api/settings/usage
+# ---------------------------------------------------------------------------
+
+GateMode = Literal["auto", "force_suppress", "force_rule_only", "force_escalate"]
+NotificationCadence = Literal["immediate", "hourly", "every_2_hours", "daily", "weekly"]
+
+
+class SignalRuleParams(BaseModel):
+    signal_type: str
+    params: dict[str, float | int | str]
+    gate_mode: GateMode
+    notification_cadence: NotificationCadence
+    updated_at: str
+    updated_by: Optional[str] = None
+
+
+class GateSettingsModel(BaseModel):
+    recurrence_window_hours: int
+    recurrence_suppress_after: int
+    max_consecutive_suppressions: int
+    rule_only_margin_ratio: float
+    max_fp_rate_for_rule_only: float
+    min_confidence_for_rule_only: float
+    max_healthy_suppression_rate: float
+    escalation_after_hours_critical: float
+    escalation_after_hours_high: float
+    escalation_after_hours_medium: float
+    updated_at: str
+    updated_by: Optional[str] = None
+
+
+class RulesResponse(BaseModel):
+    signal_rules: list[SignalRuleParams]
+    gate_settings: GateSettingsModel
+
+
+class RulesUpdateRequest(BaseModel):
+    # Partial by design: only the signal_types/settings actually supplied are
+    # written -- everything else in alert_rules/gate_settings is left as-is.
+    signal_rules: Optional[list[SignalRuleParams]] = None
+    gate_settings: Optional[GateSettingsModel] = None
+    updated_by: Optional[str] = None
+
+
+class FalsePositiveRateEntry(BaseModel):
+    signal_type: str
+    dispatched_count: int
+    false_positive_count: int
+    false_positive_rate_pct: float
+
+
+class AggregatedInsightsResponse(BaseModel):
+    # Plan SP-B §9b: per-persona moving-average KPI rollups. Fields are
+    # populated per-persona domain scope (§A's table) -- a field a given
+    # persona's view doesn't use is simply omitted (None), not zeroed, so
+    # the frontend can tell "not applicable to this persona" from "value is
+    # actually zero."
+    no_shows_today: Optional[int] = None
+    no_shows_this_week: Optional[int] = None
+    no_shows_trend_pct: Optional[float] = None
+    no_shows_trend_direction: Optional[MetricTrend] = None
+    flagged_driver_count: Optional[int] = None
+    total_drivers_evaluated: Optional[int] = None
+
+
+class CostOptimizationOpportunity(BaseModel):
+    vendor_name: str
+    cv_pct: float
+    recommendation: str
+
+
+class CostOptimizationResponse(BaseModel):
+    window_start: str
+    window_end: str
+    window_total_inr: float
+    baseline_avg_per_day_inr: float
+    trend_pct: Optional[float] = None
+    trend_direction: MetricTrend
+    opportunities: list[CostOptimizationOpportunity]
+
+
+class UsageStatsResponse(BaseModel):
+    llm_calls_today: int
+    llm_daily_limit: int
+    gate_counts_today: dict[str, int]  # {"suppress": n, "rule_only": n, "escalate": n}
+    false_positive_rate_by_signal_type: list[FalsePositiveRateEntry]
+    # False-negative safeguard (plan §1): a human-visible, non-automatic
+    # nudge when a signal_type's suppress rate looks too high to be healthy.
+    suppression_warnings: list[str]

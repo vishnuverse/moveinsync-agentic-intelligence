@@ -113,6 +113,15 @@ async def _enforce_budget_async(provider: str, daily_limit: int, redis_url: str)
         )
 
 
+def get_daily_call_count(provider: str, redis_url: str) -> int:
+    """Read-only lookup of today's call count for `GET /api/settings/usage`
+    (plan SP-B §4) -- a plain Redis GET, never an INCR, so checking usage
+    stats never itself counts against the budget it's reporting on."""
+    client = _sync_redis_client(redis_url)
+    value = client.get(_daily_call_key(provider))
+    return int(value) if value is not None else 0
+
+
 class _BudgetGuardedChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass, not a wrapping Runnable.
 

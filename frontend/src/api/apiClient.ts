@@ -1,5 +1,6 @@
 import type {
   ActivityEntry,
+  AggregatedInsightsResponse,
   ApiClient,
   ChartSeriesData,
   ChatMessage,
@@ -8,7 +9,10 @@ import type {
   ChatThread,
   ChatThreadCreateRequest,
   ChatThreadRenameRequest,
+  CostOptimizationResponse,
   DataCoverage,
+  DateRange,
+  MarkFalsePositiveRequest,
   MetricCardData,
   NotificationItem,
   PageOpts,
@@ -21,12 +25,27 @@ import type {
   ResumeDecisionRequest,
   ResumeDecisionResponse,
   Role,
+  RulesResponse,
+  RulesUpdateRequest,
   ScopeOption,
   TraceStep,
+  UsageStatsResponse,
   VendorScorecardData,
 } from "./types";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
+
+// Builds the query string for a chart/insight endpoint's window params.
+// `range` (an explicit since/until from the date-range picker) always wins
+// over `days`/`param` when both are present -- once a viewer has picked an
+// exact window, that's authoritative, not just a hint alongside a fallback
+// day-count.
+function rangeQuery(param: "days" | "months", value: number | undefined, range?: DateRange): string {
+  if (range?.since && range?.until) {
+    return `?since=${range.since}&until=${range.until}`;
+  }
+  return value ? `?${param}=${value}` : "";
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -152,31 +171,73 @@ export const realClient: ApiClient = {
     );
   },
 
-  getOtaTrend(days?: number): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>(`/charts/ota-trend${days ? `?days=${days}` : ""}`);
+  getOtaTrend(days?: number, range?: DateRange): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/ota-trend${rangeQuery("days", days, range)}`);
   },
 
-  getDelayReasons(days?: number): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>(`/charts/delay-reasons${days ? `?days=${days}` : ""}`);
+  getDelayReasons(days?: number, range?: DateRange): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/delay-reasons${rangeQuery("days", days, range)}`);
   },
 
-  getNoShowTrend(days?: number): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>(`/charts/no-show-trend${days ? `?days=${days}` : ""}`);
+  getNoShowTrend(days?: number, range?: DateRange): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/no-show-trend${rangeQuery("days", days, range)}`);
   },
 
-  getAbsenceSplit(days?: number): Promise<PieChartData> {
-    return request<PieChartData>(`/charts/absence-split${days ? `?days=${days}` : ""}`);
+  getAbsenceSplit(days?: number, range?: DateRange): Promise<PieChartData> {
+    return request<PieChartData>(`/charts/absence-split${rangeQuery("days", days, range)}`);
   },
 
-  getBillingDiscrepancy(months?: number): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>(`/charts/billing-discrepancy${months ? `?months=${months}` : ""}`);
+  getBillingDiscrepancy(months?: number, range?: DateRange): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/billing-discrepancy${rangeQuery("months", months, range)}`);
   },
 
-  getEmissionsByFuel(days?: number): Promise<ChartSeriesData> {
-    return request<ChartSeriesData>(`/charts/emissions-by-fuel${days ? `?days=${days}` : ""}`);
+  getEmissionsByFuel(days?: number, range?: DateRange): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/emissions-by-fuel${rangeQuery("days", days, range)}`);
   },
 
-  getVendorScorecard(days?: number): Promise<VendorScorecardData> {
-    return request<VendorScorecardData>(`/charts/vendor-scorecard${days ? `?days=${days}` : ""}`);
+  getVendorScorecard(days?: number, range?: DateRange): Promise<VendorScorecardData> {
+    return request<VendorScorecardData>(`/charts/vendor-scorecard${rangeQuery("days", days, range)}`);
+  },
+
+  getSignalGateFunnel(days?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/signal-gate-funnel${days ? `?days=${days}` : ""}`);
+  },
+
+  getLlmUsage(days?: number): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/llm-usage${days ? `?days=${days}` : ""}`);
+  },
+
+  getRules(): Promise<RulesResponse> {
+    return request<RulesResponse>("/settings/rules");
+  },
+
+  updateRules(body: RulesUpdateRequest): Promise<RulesResponse> {
+    return request<RulesResponse>("/settings/rules", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  getUsageStats(): Promise<UsageStatsResponse> {
+    return request<UsageStatsResponse>("/settings/usage");
+  },
+
+  markFalsePositive(id: string, body?: MarkFalsePositiveRequest): Promise<ResumeDecisionResponse> {
+    return request<ResumeDecisionResponse>(`/notifications/${id}/false-positive`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    });
+  },
+
+  getPersonaInsights(persona: PersonaId): Promise<AggregatedInsightsResponse> {
+    return request<AggregatedInsightsResponse>(`/insights/${persona}`);
+  },
+
+  getCostOptimization(since?: string, until?: string): Promise<CostOptimizationResponse> {
+    const params = new URLSearchParams();
+    if (since) params.set("since", since);
+    if (until) params.set("until", until);
+    const qs = params.toString();
+    return request<CostOptimizationResponse>(`/insights/cost-optimization/window${qs ? `?${qs}` : ""}`);
   },
 };

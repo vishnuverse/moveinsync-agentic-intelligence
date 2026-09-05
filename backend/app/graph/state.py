@@ -41,6 +41,21 @@ class TopState(TypedDict, total=False):
     # leave this unset, so they still run act exactly as before.
     skip_act: bool
 
+    # ---- SP-B gate/cadence (plan §1/§3) ----
+    # Set by app.graph.supervisor.run_pipeline BEFORE invoking this graph,
+    # from app.graph.reason.gate.evaluate_gate's decision. `gate_mode` unset
+    # (None) means "escalate" -- today's existing full-LLM-reasoning path,
+    # byte-for-byte unchanged. `gate_mode == "rule_only"` routes the reason
+    # subgraph to a templated decision instead of an LLM call (see
+    # reason/nodes.py::rule_based_decision). `notification_cadence` is read
+    # by act's notification_dispatch to compute `scheduled_for` -- it does
+    # not affect reasoning at all, only when the resulting notification
+    # becomes visible.
+    gate_mode: str | None
+    gate_reason: str | None
+    gate_confidence: float | None
+    notification_cadence: str | None
+
     # ---- reason intermediate (trace visibility) ----
     sql_question: str
     sql_result: dict[str, Any]
