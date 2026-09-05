@@ -28,6 +28,13 @@ def notification_channel(persona: str) -> str:
     return f"notifications:{persona}"
 
 
+def activity_channel(org_id: str) -> str:
+    """System-wide Agent Activity feed channel (org-scoped, not persona-scoped
+    -- the feed is deliberately cross-persona, see app/services/activity_log.py).
+    Consumed by app/api/sse.py's `/api/sse/{persona}` stream."""
+    return f"activity:{org_id}"
+
+
 @functools.lru_cache(maxsize=4)
 def _client(redis_url: str) -> redis.Redis:
     return redis.Redis.from_url(redis_url, decode_responses=True)

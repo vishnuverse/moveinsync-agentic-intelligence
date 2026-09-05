@@ -8,8 +8,11 @@ import type {
   ChatThread,
   ChatThreadCreateRequest,
   ChatThreadRenameRequest,
+  DataCoverage,
   MetricCardData,
   NotificationItem,
+  PageOpts,
+  Paginated,
   PersonaId,
   PieChartData,
   ReplayRequest,
@@ -64,8 +67,15 @@ export const realClient: ApiClient = {
     return request<MetricCardData[]>(`/dashboard?persona=${persona}`);
   },
 
-  getNotifications(persona: PersonaId): Promise<NotificationItem[]> {
-    return request<NotificationItem[]>(`/notifications?persona=${persona}`);
+  getNotifications(
+    persona: PersonaId,
+    opts?: PageOpts,
+  ): Promise<Paginated<NotificationItem>> {
+    const limit = opts?.limit ?? 25;
+    const offset = opts?.offset ?? 0;
+    return request<Paginated<NotificationItem>>(
+      `/notifications?persona=${persona}&limit=${limit}&offset=${offset}`,
+    );
   },
 
   resumeNotification(
@@ -84,6 +94,17 @@ export const realClient: ApiClient = {
 
   getReports(persona: PersonaId): Promise<ReportMeta[]> {
     return request<ReportMeta[]>(`/reports?persona=${persona}`);
+  },
+
+  generateReport(persona: PersonaId, report_type?: string): Promise<ReportMeta> {
+    return request<ReportMeta>("/reports/generate", {
+      method: "POST",
+      body: JSON.stringify({ persona, report_type }),
+    });
+  },
+
+  getDataCoverage(): Promise<DataCoverage> {
+    return request<DataCoverage>("/data-coverage");
   },
 
   getChatThreads(persona: PersonaId): Promise<ChatThread[]> {
@@ -123,8 +144,12 @@ export const realClient: ApiClient = {
     });
   },
 
-  getActivity(): Promise<ActivityEntry[]> {
-    return request<ActivityEntry[]>("/activity");
+  getActivity(opts?: PageOpts): Promise<Paginated<ActivityEntry>> {
+    const limit = opts?.limit ?? 25;
+    const offset = opts?.offset ?? 0;
+    return request<Paginated<ActivityEntry>>(
+      `/activity?limit=${limit}&offset=${offset}`,
+    );
   },
 
   getOtaTrend(days?: number): Promise<ChartSeriesData> {

@@ -26,8 +26,11 @@ import type {
   ChatThread,
   ChatThreadCreateRequest,
   ChatThreadRenameRequest,
+  DataCoverage,
   MetricCardData,
   NotificationItem,
+  PageOpts,
+  Paginated,
   PersonaId,
   PieChartData,
   ReplayRequest,
@@ -54,6 +57,22 @@ const notificationStore: Record<PersonaId, NotificationItem[]> = {
 };
 
 const traceStore: Record<string, TraceStep[]> = { ...TRACE_LIBRARY };
+
+// Mutable per-persona report store seeded from the static mock, so a mocked
+// "Generate report" can prepend a fresh meta and the subsequent list refresh
+// actually shows it (mirrors the real POST /api/reports/generate persisting a
+// new row that GET /api/reports then returns).
+const reportStore: Record<PersonaId, ReportMeta[]> = {
+  transport_manager: reportsFor("transport_manager"),
+  line_manager: reportsFor("line_manager"),
+  transport_head: reportsFor("transport_head"),
+};
+
+const REPORT_TITLE: Record<PersonaId, string> = {
+  transport_manager: "Daily Ops Digest",
+  line_manager: "Weekly Team Commute Digest",
+  transport_head: "Leadership Report — Cost, Safety, Vendor & Carbon",
+};
 
 // --- Chat threads (mock mirror of chat_threads + episodic-memory-by-thread
 // on the real backend) -- one thread per conversation, messages keyed by
@@ -206,9 +225,15 @@ export const mockClient: ApiClient = {
     return dashboardFor(persona);
   },
 
-  async getNotifications(persona: PersonaId): Promise<NotificationItem[]> {
+  async getNotifications(
+    persona: PersonaId,
+    opts?: PageOpts,
+  ): Promise<Paginated<NotificationItem>> {
     await delay();
-    return [...notificationStore[persona]];
+    const all = notificationStore[persona];
+    const limit = opts?.limit ?? 25;
+    const offset = opts?.offset ?? 0;
+    return { items: all.slice(offset, offset + limit), total: all.length };
   },
 
   async resumeNotification(
@@ -240,7 +265,30 @@ export const mockClient: ApiClient = {
 
   async getReports(persona: PersonaId): Promise<ReportMeta[]> {
     await delay();
-    return reportsFor(persona);
+    return [...reportStore[persona]];
+  },
+
+  // Fake generator: waits a couple of seconds (so the button's "Generating…"
+  // state is visible) then prepends a fresh meta the list refresh will show.
+  async generateReport(persona: PersonaId, reportType?: string): Promise<ReportMeta> {
+    await delay(1600, 2600);
+    const now = new Date();
+    const label = reportType ? `${REPORT_TITLE[persona]} (${reportType})` : REPORT_TITLE[persona];
+    const stamp = now.toISOString().slice(0, 10);
+    const report: ReportMeta = {
+      id: `${persona}-gen-${now.getTime()}`,
+      title: `${label} — ${stamp}`,
+      period: stamp,
+      generated_at: now.toISOString(),
+      preview_url: `/reports/${persona}-gen-${now.getTime()}.html`,
+    };
+    reportStore[persona] = [report, ...reportStore[persona]];
+    return report;
+  },
+
+  async getDataCoverage(): Promise<DataCoverage> {
+    await delay(120, 280);
+    return { start_date: "2026-05-01", end_date: "2026-07-31", trip_count: 4200 };
   },
 
   async getChatThreads(persona: PersonaId): Promise<ChatThread[]> {
@@ -354,9 +402,11 @@ export const mockClient: ApiClient = {
     return { message: agentMsg };
   },
 
-  async getActivity(): Promise<ActivityEntry[]> {
+  async getActivity(opts?: PageOpts): Promise<Paginated<ActivityEntry>> {
     await delay();
-    return ACTIVITY_LOG;
+    const limit = opts?.limit ?? 25;
+    const offset = opts?.offset ?? 0;
+    return { items: ACTIVITY_LOG.slice(offset, offset + limit), total: ACTIVITY_LOG.length };
   },
 
   async getOtaTrend(days = 45): Promise<ChartSeriesData> {

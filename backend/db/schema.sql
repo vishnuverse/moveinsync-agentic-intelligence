@@ -317,6 +317,10 @@ CREATE INDEX idx_agent_notifications_org_id ON agent_notifications(org_id);
 CREATE INDEX idx_agent_notifications_persona ON agent_notifications(persona);
 CREATE INDEX idx_agent_notifications_status ON agent_notifications(status);
 CREATE INDEX idx_agent_notifications_thread_id ON agent_notifications(thread_id);
+-- Composite index for the paginated per-persona inbox read (see
+-- db/migrations/002_pagination_indexes.sql); kept here so fresh DBs built
+-- from this schema get it without the migration.
+CREATE INDEX IF NOT EXISTS idx_agent_notifications_org_persona_created ON agent_notifications (org_id, persona, created_at DESC);
 
 CREATE TABLE agent_reports (
     id            BIGSERIAL PRIMARY KEY,
@@ -336,6 +340,10 @@ CREATE TABLE agent_reports (
 CREATE INDEX idx_agent_reports_org_id ON agent_reports(org_id);
 CREATE INDEX idx_agent_reports_persona ON agent_reports(persona);
 CREATE INDEX idx_agent_reports_report_type ON agent_reports(report_type);
+-- Composite index for the paginated per-persona report list read (see
+-- db/migrations/002_pagination_indexes.sql); kept here so fresh DBs built
+-- from this schema get it without the migration.
+CREATE INDEX IF NOT EXISTS idx_agent_reports_org_persona_generated ON agent_reports (org_id, persona, generated_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- sql_agent_examples -- pgvector-backed NL->SQL few-shot grounding (optional RAG layer)

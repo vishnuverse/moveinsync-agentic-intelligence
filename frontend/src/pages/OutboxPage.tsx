@@ -305,10 +305,15 @@ export function OutboxPage() {
 
   const load = useCallback(() => {
     setStatus("loading");
-    Promise.all([withTimeout(api.getReports(persona)), withTimeout(api.getNotifications(persona))])
+    // Outbox wants the full set of comms, not a page -- ask for the max page
+    // the paginated /notifications endpoint allows (server caps limit at 200).
+    Promise.all([
+      withTimeout(api.getReports(persona)),
+      withTimeout(api.getNotifications(persona, { limit: 200, offset: 0 })),
+    ])
       .then(([reps, notifs]) => {
         setReports(reps);
-        setComms(notifs);
+        setComms(notifs.items);
         setStatus("ready");
       })
       .catch(() => setStatus("error"));

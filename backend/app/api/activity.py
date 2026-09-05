@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import default_org_id
-from app.api.schemas import ActivityEntry
-from app.services.activity_log import list_activity
+from app.api.schemas import ActivityEntry, ActivityListResponse
+from app.services.activity_log import count_activity, list_activity
 
 router = APIRouter(tags=["activity"])
 
 
-@router.get("/activity", response_model=list[ActivityEntry])
-def get_activity() -> list[ActivityEntry]:
-    rows = list_activity(default_org_id(), limit=100)
-    return [
+@router.get("/activity", response_model=ActivityListResponse)
+def get_activity(
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ActivityListResponse:
+    org_id = default_org_id()
+    rows = list_activity(org_id, limit=limit, offset=offset)
+    total = count_activity(org_id)
+    items = [
         ActivityEntry(
             id=str(row["id"]),
             persona=row["persona"],
@@ -24,3 +29,4 @@ def get_activity() -> list[ActivityEntry]:
         )
         for row in rows
     ]
+    return ActivityListResponse(items=items, total=total)

@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { NotificationItem, NotificationStatus } from "../api";
+import { isNotificationFrame, useLiveStream } from "../api/liveStream";
 import { useAppState } from "../state/AppStateContext";
 import { EmptyState, ErrorState, LoadingState } from "./AsyncStatus";
 import { withTimeout } from "../lib/timeout";
 import "./NotificationInbox.css";
+
+const PAGE_SIZE = 25;
 
 const SEVERITY_BADGE: Record<NotificationItem["severity"], string> = {
   critical: "badge-critical",
@@ -42,23 +45,64 @@ function formatTime(ts: string): string {
 export function NotificationInbox() {
   const { persona, uiState, setSelectedNotification, openTrace, onResolved } = useAppState();
   const [items, setItems] = useState<NotificationItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const load = useCallback(() => {
-    setStatus("loading");
-    withTimeout(api.getNotifications(persona))
-      .then((res) => {
-        setItems(res);
-        setStatus("ready");
-      })
-      .catch(() => setStatus("error"));
-  }, [persona]);
+  // How many items are currently shown -- kept in a ref so a live/silent
+  // refresh can re-fetch the same span without recreating `refresh` (which
+  // would churn the onResolved subscription and the SSE handler).
+  const shownCountRef = useRef(0);
+  shownCountRef.current = items.length;
+
+  // Load/refresh from offset 0. `silent` skips the loading flash so an
+  // incoming live frame refreshes the list in place instead of blanking it.
+  const refresh = useCallback(
+    (silent = false) => {
+      if (!silent) setStatus("loading");
+      const limit = Math.max(PAGE_SIZE, shownCountRef.current);
+      withTimeout(api.getNotifications(persona, { limit, offset: 0 }))
+        .then((res) => {
+          setItems(res.items);
+          setTotal(res.total);
+          setStatus("ready");
+        })
+        .catch(() => {
+          if (!silent) setStatus("error");
+        });
+    },
+    [persona],
+  );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    refresh();
+  }, [refresh]);
 
-  useEffect(() => onResolved(() => load()), [onResolved, load]);
+  useEffect(() => onResolved(() => refresh(true)), [onResolved, refresh]);
+
+  // SSE: any notification-kind frame refreshes the list in place (defensive /
+  // inert in mock mode -- see liveStream.ts).
+  useLiveStream(persona, {
+    onFrame: (frame) => {
+      if (isNotificationFrame(frame)) refresh(true);
+    },
+  });
+
+  const loadMore = useCallback(() => {
+    setLoadingMore(true);
+    withTimeout(api.getNotifications(persona, { limit: PAGE_SIZE, offset: shownCountRef.current }))
+      .then((res) => {
+        setItems((prev) => {
+          const seen = new Set(prev.map((n) => n.id));
+          return [...prev, ...res.items.filter((n) => !seen.has(n.id))];
+        });
+        setTotal(res.total);
+      })
+      .catch(() => {
+        /* keep the pages already loaded; the button stays available to retry */
+      })
+      .finally(() => setLoadingMore(false));
+  }, [persona]);
 
   function handleOpen(item: NotificationItem) {
     setSelectedNotification(item.id);
@@ -71,12 +115,13 @@ export function NotificationInbox() {
   }
 
   const sorted = [...items].sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status]);
+  const hasMore = items.length < total;
 
   return (
     <div className="notification-inbox">
       {status === "loading" && <LoadingState label="Loading notifications…" />}
       {status === "error" && (
-        <ErrorState label="Couldn't load notifications." onRetry={load} />
+        <ErrorState label="Couldn't load notifications." onRetry={() => refresh()} />
       )}
       {status === "ready" && sorted.length === 0 && (
         <EmptyState label="No notifications for this persona right now." />
@@ -104,6 +149,16 @@ export function NotificationInbox() {
             <p className="notification-item-message">{item.message}</p>
           </button>
         ))}
+      {status === "ready" && hasMore && (
+        <button
+          type="button"
+          className="btn btn-secondary notification-inbox-more"
+          onClick={loadMore}
+          disabled={loadingMore}
+        >
+          {loadingMore ? "Loading…" : `Load more (${total - items.length} left)`}
+        </button>
+      )}
     </div>
   );
 }

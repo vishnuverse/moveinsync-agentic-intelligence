@@ -74,6 +74,16 @@ Large effort decomposed into four sub-projects. **Sequence: A → B → C (→ D
 
 ---
 
+## 6. Scale + UX pass — DONE & verified (2026-09-05)
+
+- [x] **Pagination + indexing (Notifications + Agent Activity).** `GET /notifications` & `/activity` now take `limit`/`offset` and return `{items, total}`; frontend "Load more". Migration `002_pagination_indexes.sql` adds composite `(org_id, persona, created_at DESC)` on `agent_notifications` and `(org_id, persona, generated_at DESC)` on `agent_reports` (applied + verified). **Verified: Load more 51→ "1 left" (notifications), 717 total (activity).**
+- [x] **SSE.** `GET /api/sse/{persona}` (StreamingResponse, reuses the Redis `notifications:{persona}` + new `activity:{org}` channels). Frontend `liveStream.ts` EventSource wires into NotificationInbox + AgentActivity. `activity_log` now publishes activity frames; `demo.py` records the pipeline run so Simulate lights both. **Verified end-to-end: one replay delivered a `notification` AND an `activity` frame over SSE.**
+- [x] **"Generate report" button.** `POST /api/reports/generate` wraps `run_report`; button in ReportsSection. **Verified: created report id=4 in ~10s, appears in list.**
+- [x] **Live-page data window.** `GET /api/data-coverage` (MIN/MAX trip_date + count); pill on Live header. **Verified: "Data window: 2026-05-01 → 2026-09-05 (70,216 trips)".**
+- [x] **Mock-default flip.** `api/index.ts` now defaults to REAL; mock is opt-in (`VITE_USE_MOCK === "true"`).
+- [x] **Bugfix: Outbox "couldn't load".** It requested `limit:500` but the paginated endpoint caps at 200 (422). Changed to `limit:200`. **Verified loads.**
+- Audit answer (no gaps): every real ApiClient method → a registered backend route backed by real DB queries; only intentional statics remain (`getRoles`), mock client is the standalone-dev fallback only. "Do all features need live?" → No: live/SSE on Notifications + Activity (time-sensitive); dashboards/reports/trends stay fetch-on-load.
+
 ## 5. Session decisions log
 
 - 2026-09-05: Program decomposed A/B/C/D; sequence A→B→C. **SP-A chosen first.** Build paused by user ("wait to build"). Chat/Q&A designs (T1–T3) verified, not yet approved to build. No concurrent frontend changes visible in tree at decision time.

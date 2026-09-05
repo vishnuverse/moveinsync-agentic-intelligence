@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from app.contracts import get_contract
 from app.graph.act.db import get_engine
+from app.graph.act.redis_publish import activity_channel, publish_event
 
 TriggeredBy = Literal["schedule", "event"]
 
@@ -101,16 +102,47 @@ def record_pipeline_summary(
     table = contract.table
     c = contract.column
     engine = get_engine()
+    inserted: list[dict[str, Any]] = []
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                f"INSERT INTO {table} ({c('org_id')}, {c('persona')}, {c('action')}, "
-                f"{c('thread_id')}, {c('triggered_by')}) "
-                f"VALUES (:org_id, :persona, :action, :thread_id, :triggered_by)"
-            ),
-            rows,
+        for row in rows:
+            written = conn.execute(
+                text(
+                    f"INSERT INTO {table} ({c('org_id')}, {c('persona')}, {c('action')}, "
+                    f"{c('thread_id')}, {c('triggered_by')}) "
+                    f"VALUES (:org_id, :persona, :action, :thread_id, :triggered_by) "
+                    f"RETURNING {c('id')} AS id, {c('created_at')} AS created_at"
+                ),
+                row,
+            ).mappings().first()
+            inserted.append({**row, "id": written["id"], "created_at": written["created_at"]})
+    for row in inserted:
+        _publish_activity(row)
+    return len(inserted)
+
+
+def _publish_activity(row: dict[str, Any]) -> None:
+    """Fire the freshly-written pipeline_run row onto `activity:{org_id}` so
+    the SSE stream (app/api/sse.py) can push it to the Agent Activity feed
+    live, matching the notification push already done in the act nodes. Shape
+    mirrors ActivityEntry (app/api/schemas.py) field-for-field so the frontend
+    maps an SSE frame and a polled /api/activity row identically. Best-effort:
+    a Redis hiccup must never fail the run that produced the row (the row is
+    already persisted; the feed's poll fallback still surfaces it)."""
+    created_at = row.get("created_at")
+    try:
+        publish_event(
+            activity_channel(row["org_id"]),
+            {
+                "kind": "activity",
+                "id": str(row["id"]),
+                "persona": row["persona"],
+                "action": row["action"],
+                "timestamp": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+                "triggered_by": row["triggered_by"],
+            },
         )
-    return len(rows)
+    except Exception:  # noqa: BLE001 - live push is best-effort, persistence already succeeded
+        pass
 
 
 def record_report_run(
@@ -141,17 +173,30 @@ def record_report_run(
     c = contract.column
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(
+        written = conn.execute(
             text(
                 f"INSERT INTO {table} ({c('org_id')}, {c('persona')}, {c('action')}, "
                 f"{c('thread_id')}, {c('triggered_by')}) "
-                f"VALUES (:org_id, :persona, :action, :thread_id, :triggered_by)"
+                f"VALUES (:org_id, :persona, :action, :thread_id, :triggered_by) "
+                f"RETURNING {c('id')} AS id, {c('created_at')} AS created_at"
             ),
             {"org_id": org_id, "persona": persona, "action": action, "thread_id": thread_id, "triggered_by": triggered_by},
-        )
+        ).mappings().first()
+    _publish_activity(
+        {
+            "id": written["id"],
+            "org_id": org_id,
+            "persona": persona,
+            "action": action,
+            "triggered_by": triggered_by,
+            "created_at": written["created_at"],
+        }
+    )
 
 
-def list_activity(org_id: str | None = None, *, limit: int = 100) -> list[dict[str, Any]]:
+def list_activity(
+    org_id: str | None = None, *, limit: int = 100, offset: int = 0
+) -> list[dict[str, Any]]:
     """Most-recent-first pipeline_runs rows, optionally scoped to one org_id.
     Not persona-filtered -- callers (the /activity route) filter client-side
     if they ever need to, matching the plan's "system-wide" framing."""
@@ -160,7 +205,7 @@ def list_activity(org_id: str | None = None, *, limit: int = 100) -> list[dict[s
     c = contract.column
     engine = get_engine()
     where = f"WHERE {c('org_id')} = :org_id" if org_id else ""
-    params: dict[str, Any] = {"limit": limit}
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
     if org_id:
         params["org_id"] = org_id
     with engine.begin() as conn:
@@ -169,8 +214,24 @@ def list_activity(org_id: str | None = None, *, limit: int = 100) -> list[dict[s
                 f"SELECT {c('id')} AS id, {c('persona')} AS persona, {c('action')} AS action, "
                 f"{c('thread_id')} AS thread_id, {c('triggered_by')} AS triggered_by, "
                 f"{c('created_at')} AS created_at "
-                f"FROM {table} {where} ORDER BY {c('created_at')} DESC LIMIT :limit"
+                f"FROM {table} {where} ORDER BY {c('created_at')} DESC LIMIT :limit OFFSET :offset"
             ),
             params,
         ).mappings().all()
     return [dict(r) for r in rows]
+
+
+def count_activity(org_id: str | None = None) -> int:
+    """Total count of the rows list_activity() paginates over (same optional
+    org scope), so the API's `total` matches a fully-paged `items`."""
+    contract = get_contract().entity("pipeline_run")
+    table = contract.table
+    c = contract.column
+    engine = get_engine()
+    where = f"WHERE {c('org_id')} = :org_id" if org_id else ""
+    params: dict[str, Any] = {}
+    if org_id:
+        params["org_id"] = org_id
+    with engine.begin() as conn:
+        total = conn.execute(text(f"SELECT COUNT(*) FROM {table} {where}"), params).scalar()
+    return int(total or 0)

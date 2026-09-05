@@ -243,17 +243,44 @@ export interface LiveEvent {
   published_at?: string;
 }
 
+// --- Pagination (SP: Notifications + Agent Activity). The list endpoints now
+// return an envelope so the UI can offer a "Load more" that walks offsets
+// until items.length >= total, instead of assuming it got everything at once.
+export interface PageOpts {
+  limit?: number;
+  offset?: number;
+}
+
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+}
+
+// GET /api/data-coverage -- the date span + trip count the live/demo data
+// actually covers, so the Live page can label its window instead of implying
+// "now". Dates are "YYYY-MM-DD"; null when the dataset is empty.
+export interface DataCoverage {
+  start_date: string | null;
+  end_date: string | null;
+  trip_count: number;
+}
+
 export interface ApiClient {
   getRoles(): Promise<Role[]>;
   replayDemo(body: ReplayRequest): Promise<ReplayResponse>;
   getDashboard(persona: PersonaId): Promise<MetricCardData[]>;
-  getNotifications(persona: PersonaId): Promise<NotificationItem[]>;
+  getNotifications(
+    persona: PersonaId,
+    opts?: PageOpts,
+  ): Promise<Paginated<NotificationItem>>;
   resumeNotification(
     id: string,
     body: ResumeDecisionRequest,
   ): Promise<ResumeDecisionResponse>;
   getTrace(threadId: string): Promise<TraceStep[]>;
   getReports(persona: PersonaId): Promise<ReportMeta[]>;
+  generateReport(persona: PersonaId, report_type?: string): Promise<ReportMeta>;
+  getDataCoverage(): Promise<DataCoverage>;
   getChatThreads(persona: PersonaId): Promise<ChatThread[]>;
   createChatThread(body: ChatThreadCreateRequest): Promise<ChatThread>;
   renameChatThread(id: string, body: ChatThreadRenameRequest): Promise<ChatThread>;
@@ -261,7 +288,7 @@ export interface ApiClient {
   getThreadMessages(threadId: string): Promise<ChatMessage[]>;
   getScopeOptions(persona: PersonaId): Promise<ScopeOption[]>;
   postChat(body: ChatRequest): Promise<ChatResponse>;
-  getActivity(): Promise<ActivityEntry[]>;
+  getActivity(opts?: PageOpts): Promise<Paginated<ActivityEntry>>;
   getOtaTrend(days?: number): Promise<ChartSeriesData>;
   getDelayReasons(days?: number): Promise<ChartSeriesData>;
   getNoShowTrend(days?: number): Promise<ChartSeriesData>;

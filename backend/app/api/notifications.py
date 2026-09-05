@@ -21,21 +21,33 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from langgraph.types import Command
 
 from app.api.deps import default_org_id, get_top_graph
-from app.api.schemas import NotificationItem, PersonaId, ResumeDecisionRequest, ResumeDecisionResponse
+from app.api.schemas import (
+    NotificationItem,
+    NotificationListResponse,
+    PersonaId,
+    ResumeDecisionRequest,
+    ResumeDecisionResponse,
+)
 from app.graph.act.db import get_engine, get_notification
-from app.services.notifications_query import list_notifications, to_frontend_status
+from app.services.notifications_query import count_notifications, list_notifications, to_frontend_status
 
 router = APIRouter(tags=["notifications"])
 
 
-@router.get("/notifications", response_model=list[NotificationItem])
-def get_notifications(persona: PersonaId) -> list[NotificationItem]:
-    rows = list_notifications(default_org_id(), persona)
-    return [
+@router.get("/notifications", response_model=NotificationListResponse)
+def get_notifications(
+    persona: PersonaId,
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> NotificationListResponse:
+    org_id = default_org_id()
+    rows = list_notifications(org_id, persona, limit=limit, offset=offset)
+    total = count_notifications(org_id, persona)
+    items = [
         NotificationItem(
             id=str(row["id"]),
             severity=row["severity"],
@@ -46,6 +58,7 @@ def get_notifications(persona: PersonaId) -> list[NotificationItem]:
         )
         for row in rows
     ]
+    return NotificationListResponse(items=items, total=total)
 
 
 @router.post("/notifications/{notification_id}/resume", response_model=ResumeDecisionResponse)

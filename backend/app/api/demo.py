@@ -146,6 +146,16 @@ def replay(body: ReplayRequest) -> ReplayResponse:
         from app.graph.supervisor import run_pipeline
 
         pipeline_summary = run_pipeline(org_id)
+        # Persist + live-publish the activity rows the same way a scheduler tick
+        # does (schedulers/interval.py), so the Agent Activity feed updates live
+        # over SSE when the demo button is pressed -- run_pipeline itself does
+        # not record activity; the scheduler normally does that separately.
+        try:
+            from app.services.activity_log import record_pipeline_summary
+
+            record_pipeline_summary(org_id, pipeline_summary, triggered_by="event")
+        except Exception:  # noqa: BLE001 - activity logging must never fail the demo
+            logger.exception("demo.replay: activity record/publish failed (non-fatal)")
     except Exception:  # noqa: BLE001
         logger.exception("demo.replay: run_pipeline failed (rows injected, scheduler will retry)")
 

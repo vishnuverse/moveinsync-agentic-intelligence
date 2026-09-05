@@ -77,3 +77,8 @@
   color: var(--color-text);
   line-height: 1.5;
 }
+
+.notification-inbox-more {
+  align-self: flex-start;
+  margin-top: var(--space-3);
+}

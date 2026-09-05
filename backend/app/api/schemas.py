@@ -46,6 +46,14 @@ class NotificationItem(BaseModel):
     created_at: str
 
 
+class NotificationListResponse(BaseModel):
+    # Paginated wrapper (plan API contract): `items` are the current page,
+    # `total` is the count of ALL matching rows for this persona/org ignoring
+    # limit/offset -- so the frontend can render "showing 25 of 137".
+    items: list[NotificationItem]
+    total: int
+
+
 class ResumeDecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
     edited_text: Optional[str] = None
@@ -72,6 +80,14 @@ class ReportMeta(BaseModel):
     period: str
     generated_at: str
     preview_url: str
+
+
+class ReportGenerateRequest(BaseModel):
+    persona: PersonaId
+    # Optional: when omitted the route picks the persona's default report_type
+    # (transport_manager -> daily_digest, line_manager -> weekly_digest,
+    # transport_head -> monthly_leadership).
+    report_type: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -152,6 +168,22 @@ class ActivityEntry(BaseModel):
     action: str
     timestamp: str
     triggered_by: ActivityTrigger
+
+
+class ActivityListResponse(BaseModel):
+    # Paginated wrapper for GET /api/activity (same contract as
+    # NotificationListResponse: `total` counts ALL rows, ignoring limit/offset).
+    items: list[ActivityEntry]
+    total: int
+
+
+class DataCoverage(BaseModel):
+    # GET /api/data-coverage: the span and volume of the underlying `trip`
+    # data, so the UI can anchor "as of <date>" copy to the data instead of
+    # wall-clock now (the dataset only spans a fixed historical window).
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    trip_count: int
 
 
 class ErrorBody(BaseModel):

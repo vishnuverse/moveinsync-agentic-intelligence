@@ -2,9 +2,34 @@
   margin-top: var(--space-6);
 }
 
+.reports-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
 .reports-section-heading {
   font-size: var(--text-lg);
-  margin-bottom: var(--space-3);
+  margin: 0;
+}
+
+.reports-generate-btn {
+  flex: none;
+}
+
+.reports-generate-error {
+  font-size: var(--text-sm);
+  color: var(--color-critical);
+  margin: 0 0 var(--space-3);
+}
+
+.reports-section-empty {
+  font-size: var(--text-md);
+  color: var(--color-text-muted);
+  margin: 0;
 }
 
 .reports-list {
