@@ -235,6 +235,25 @@ cat docs/PROBLEM_STATEMENT.md
 
 ### Running the Full Stack (Docker)
 
+**Required one-time setup:** `backend/.env` holds real secrets (LLM API
+key), so it's gitignored and doesn't exist on a fresh clone — only its
+template, `backend/.env.example`, is committed. Without it, `backend`
+and `scheduler` fail to even start:
+`env file .../backend/.env not found`, and `docker compose up` exits
+immediately. Copy the template first:
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+`backend/.env.example` ships with `SARVAM_API_KEY=` blank — the stack
+still boots and the dashboards/data work fine with it blank (LLM
+failures degrade gracefully: report generation falls back to a static
+narrative, chat returns a clean "not configured" error), but the
+mandatory "agentic behaviour — senses, reasons, and acts" is what
+actually calls an LLM, so seeing that fully working needs a real
+`SARVAM_API_KEY` (or `OPENROUTER_API_KEY`) filled into `backend/.env`.
+
 ```bash
 docker compose up --build
 ```
