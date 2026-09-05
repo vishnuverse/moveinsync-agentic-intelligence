@@ -18,6 +18,7 @@ import {
 } from "./mockData";
 import type {
   ActivityEntry,
+  AggregatedInsightsResponse,
   ApiClient,
   ChartSeriesData,
   ChatMessage,
@@ -26,7 +27,9 @@ import type {
   ChatThread,
   ChatThreadCreateRequest,
   ChatThreadRenameRequest,
+  CostOptimizationResponse,
   DataCoverage,
+  MarkFalsePositiveRequest,
   MetricCardData,
   NotificationItem,
   PageOpts,
@@ -39,8 +42,11 @@ import type {
   ResumeDecisionRequest,
   ResumeDecisionResponse,
   Role,
+  RulesResponse,
+  RulesUpdateRequest,
   ScopeOption,
   TraceStep,
+  UsageStatsResponse,
   VendorScorecardData,
 } from "./types";
 import { CHAT_MESSAGE_MAX_LEN } from "./chatLimits";
@@ -57,6 +63,39 @@ const notificationStore: Record<PersonaId, NotificationItem[]> = {
 };
 
 const traceStore: Record<string, TraceStep[]> = { ...TRACE_LIBRARY };
+
+// SP-B Settings page fixtures. "incident"/"escort_compliance_violation" are
+// the two Major Risk Hotspot signal types (plan §B0) -- gate_mode/
+// notification_cadence stay "force_escalate"/"immediate" here to mirror the
+// backend's non-overridable safety floor; SettingsPage renders their
+// controls disabled regardless of what this fixture says, but keeping the
+// fixture consistent avoids a misleading mock-only state.
+const rulesStore: RulesResponse = {
+  signal_rules: [
+    { signal_type: "incident", params: {}, gate_mode: "force_escalate", notification_cadence: "immediate", updated_at: new Date().toISOString() },
+    { signal_type: "escort_compliance_violation", params: { violation_limit: 50, night_window_start_hour: 21, night_window_end_hour: 6, drop_delay_critical_minutes: 15 }, gate_mode: "force_escalate", notification_cadence: "immediate", updated_at: new Date().toISOString() },
+    { signal_type: "delay_breach", params: { delay_threshold_minutes: 15 }, gate_mode: "auto", notification_cadence: "immediate", updated_at: new Date().toISOString() },
+    { signal_type: "cost_divergence", params: { divergence_pct: 0.2 }, gate_mode: "auto", notification_cadence: "hourly", updated_at: new Date().toISOString() },
+    { signal_type: "emissions_over_target", params: { min_ratio_over_baseline: 1.05 }, gate_mode: "auto", notification_cadence: "daily", updated_at: new Date().toISOString() },
+    { signal_type: "attendance_correlated_with_transport", params: { delay_threshold_minutes: 15, min_late_samples: 3, signal_limit: 25, transport_correlation_ratio: 0.6, unrelated_correlation_ratio: 0.15 }, gate_mode: "auto", notification_cadence: "immediate", updated_at: new Date().toISOString() },
+    { signal_type: "attendance_unrelated_late", params: {}, gate_mode: "auto", notification_cadence: "daily", updated_at: new Date().toISOString() },
+    { signal_type: "billing_discrepancy", params: { min_slab_sample: 20, min_discrepancy_inr: 500 }, gate_mode: "auto", notification_cadence: "weekly", updated_at: new Date().toISOString() },
+    { signal_type: "performance_variability", params: { cv_threshold_pct: 20, min_sample_size: 15, variability_minutes_floor: 10 }, gate_mode: "auto", notification_cadence: "daily", updated_at: new Date().toISOString() },
+  ],
+  gate_settings: {
+    recurrence_window_hours: 24,
+    recurrence_suppress_after: 3,
+    max_consecutive_suppressions: 5,
+    rule_only_margin_ratio: 2.0,
+    max_fp_rate_for_rule_only: 0.2,
+    min_confidence_for_rule_only: 0.6,
+    max_healthy_suppression_rate: 0.8,
+    escalation_after_hours_critical: 1.0,
+    escalation_after_hours_high: 4.0,
+    escalation_after_hours_medium: 24.0,
+    updated_at: new Date().toISOString(),
+  },
+};
 
 // Mutable per-persona report store seeded from the static mock, so a mocked
 // "Generate report" can prepend a fresh meta and the subsequent list refresh
@@ -255,6 +294,20 @@ export const mockClient: ApiClient = {
     throw new Error(`Notification ${id} not found`);
   },
 
+  async markFalsePositive(id: string, body?: MarkFalsePositiveRequest): Promise<ResumeDecisionResponse> {
+    await delay(300, 700);
+    for (const persona of Object.keys(notificationStore) as PersonaId[]) {
+      const list = notificationStore[persona];
+      const idx = list.findIndex((n) => n.id === id);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], status: "acked", is_false_positive: true };
+        console.debug(`[mock] notification ${id} marked false positive: ${body?.note ?? "(no note)"}`);
+        return { id, status: "acked", resolved_at: new Date().toISOString() };
+      }
+    }
+    throw new Error(`Notification ${id} not found`);
+  },
+
   async getTrace(threadId: string): Promise<TraceStep[]> {
     await delay();
     if (traceStore[threadId]) return traceStore[threadId];
@@ -288,7 +341,7 @@ export const mockClient: ApiClient = {
 
   async getDataCoverage(): Promise<DataCoverage> {
     await delay(120, 280);
-    return { start_date: "2026-05-01", end_date: "2026-07-31", trip_count: 4200 };
+    return { start_date: "2026-05-01", end_date: "2026-07-31", trip_count: 4200, dense_end_date: "2026-07-31" };
   },
 
   async getChatThreads(persona: PersonaId): Promise<ChatThread[]> {
@@ -409,6 +462,10 @@ export const mockClient: ApiClient = {
     return { items: ACTIVITY_LOG.slice(offset, offset + limit), total: ACTIVITY_LOG.length };
   },
 
+  // `range` is accepted for interface parity with the real client (the
+  // date-range picker passes it), but the mock's fixtures are synthetic
+  // random series keyed only by day-count -- an explicit since/until has
+  // nothing real to slice, so it's a no-op here.
   async getOtaTrend(days = 45): Promise<ChartSeriesData> {
     await delay();
     return otaTrendMock(days);
@@ -442,5 +499,128 @@ export const mockClient: ApiClient = {
   async getVendorScorecard(days = 90): Promise<VendorScorecardData> {
     await delay();
     return vendorScorecardMock(days);
+  },
+
+  async getSignalGateFunnel(): Promise<ChartSeriesData> {
+    await delay();
+    const categories = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (13 - i));
+      return d.toISOString().slice(0, 10);
+    });
+    return {
+      categories,
+      series: [
+        { name: "Suppressed", data: categories.map(() => Math.round(8 + Math.random() * 10)) },
+        { name: "Rule-Only", data: categories.map(() => Math.round(3 + Math.random() * 6)) },
+        { name: "Escalated", data: categories.map(() => Math.round(1 + Math.random() * 4)) },
+      ],
+    };
+  },
+
+  async getLlmUsage(): Promise<ChartSeriesData> {
+    await delay();
+    const categories = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (13 - i));
+      return d.toISOString().slice(0, 10);
+    });
+    return {
+      categories,
+      series: [{ name: "LLM calls", data: categories.map(() => Math.round(20 + Math.random() * 60)) }],
+      breach_threshold: 500,
+      target_label: "Daily budget",
+    };
+  },
+
+  async getRules(): Promise<RulesResponse> {
+    await delay();
+    return structuredClone(rulesStore);
+  },
+
+  async updateRules(body: RulesUpdateRequest): Promise<RulesResponse> {
+    await delay(300, 700);
+    if (body.signal_rules) {
+      for (const rule of body.signal_rules) {
+        const idx = rulesStore.signal_rules.findIndex((r) => r.signal_type === rule.signal_type);
+        const updated = { ...rule, updated_at: new Date().toISOString() };
+        if (idx !== -1) rulesStore.signal_rules[idx] = updated;
+        else rulesStore.signal_rules.push(updated);
+      }
+    }
+    if (body.gate_settings) {
+      rulesStore.gate_settings = { ...body.gate_settings, updated_at: new Date().toISOString() };
+    }
+    return structuredClone(rulesStore);
+  },
+
+  async getUsageStats(): Promise<UsageStatsResponse> {
+    await delay();
+    return {
+      llm_calls_today: 132,
+      llm_daily_limit: 500,
+      gate_counts_today: { suppress: 14, rule_only: 6, escalate: 9 },
+      false_positive_rate_by_signal_type: [
+        { signal_type: "delay_breach", dispatched_count: 40, false_positive_count: 3, false_positive_rate_pct: 7.5 },
+        { signal_type: "cost_divergence", dispatched_count: 12, false_positive_count: 0, false_positive_rate_pct: 0 },
+      ],
+      suppression_warnings: [],
+    };
+  },
+
+  async getPersonaInsights(persona: PersonaId): Promise<AggregatedInsightsResponse> {
+    await delay();
+    if (persona === "transport_manager") {
+      return {
+        no_shows_today: 12,
+        no_shows_this_week: 68,
+        no_shows_trend_pct: 8.4,
+        no_shows_trend_direction: "up",
+        flagged_driver_count: 3,
+        total_drivers_evaluated: 45,
+      };
+    }
+    if (persona === "line_manager") {
+      return {
+        no_shows_today: 2,
+        no_shows_this_week: 9,
+        no_shows_trend_pct: -12.0,
+        no_shows_trend_direction: "down",
+      };
+    }
+    return {
+      no_shows_today: 18,
+      no_shows_this_week: 96,
+      no_shows_trend_pct: 3.1,
+      no_shows_trend_direction: "flat",
+    };
+  },
+
+  async getCostOptimization(since?: string, until?: string): Promise<CostOptimizationResponse> {
+    await delay();
+    const end = until ?? new Date().toISOString().slice(0, 10);
+    const start = since ?? end;
+    return {
+      window_start: start,
+      window_end: end,
+      window_total_inr: 3_842_500,
+      baseline_avg_per_day_inr: 3_500_000,
+      trend_pct: 9.8,
+      trend_direction: "up",
+      opportunities: [
+        {
+          vendor_name: "Aarav Mikhailov Travel",
+          cv_pct: 118.1,
+          recommendation:
+            "Aarav Mikhailov Travel's per-km billing is 118% inconsistent in this window -- an invoice audit or rate-card renegotiation is worth prioritizing here.",
+        },
+        {
+          vendor_name: "Divya Mikhailov Travel",
+          cv_pct: 94.6,
+          recommendation:
+            "Divya Mikhailov Travel's per-km billing is 95% inconsistent in this window -- worth a closer look at contract terms.",
+        },
+      ],
+    };
   },
 };
