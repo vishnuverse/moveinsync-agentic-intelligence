@@ -15,8 +15,9 @@ other node/subgraph in the top-level graph.
 from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
+from app.contracts import get_contract
 from app.graph.sense import nodes as detectors
 from app.graph.sense.db import get_engine
 from app.graph.sense.state import SenseState
@@ -61,6 +62,21 @@ def poll_or_event_entry(state: SenseState) -> dict:
     return {"org_id": org_id}
 
 
+def _real_data_available(conn) -> bool:
+    """Every detector ultimately reads `mis.*` (via app.contracts), which
+    db/real_data/ingest.py only creates when the real dataset's CSVs are
+    present (see docker-compose.yml's `seed` comment) -- a fresh clone
+    without that gitignored, host-only dataset never gets `mis.trip`
+    created. Gated once here, on the subgraph's single shared entry point,
+    rather than in each detector: every detector queries `mis.*` more than
+    once (nodes.py's `_resolve_since` guard only covers its own first
+    lookup), so checking per-query would still let a detector's second or
+    third query raise UndefinedTable past `safe_detect` and spam a full
+    traceback into the logs on every scheduler tick."""
+    trip = get_contract().entity("trip")
+    return conn.execute(text("SELECT to_regclass(:t)"), {"t": trip.table}).scalar() is not None
+
+
 def _make_detector_node(detector_name: str, engine: Engine):
     detector_fn = getattr(detectors, detector_name)
 
@@ -68,6 +84,8 @@ def _make_detector_node(detector_name: str, engine: Engine):
         org_id = state["org_id"]
         since = state.get("since")
         with engine.connect() as conn:
+            if not _real_data_available(conn):
+                return {"signals": []}
             signals = detector_fn(conn, org_id, since)
         return {"signals": signals}
 

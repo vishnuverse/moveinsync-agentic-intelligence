@@ -104,11 +104,20 @@ def _resolve_since(conn: Connection, org_id: str, since: datetime | None) -> dat
     wall-clock now") -- extended here to the sense layer too, via one MAX()
     query against the trip entity (the central fact table every other
     entity's real timestamps cluster around). Falls back to wall-clock if
-    trip is empty (e.g. a genuinely fresh/synthetic DB with no data yet)."""
+    trip is empty (e.g. a genuinely fresh/synthetic DB with no data yet) --
+    or if `mis.trip` doesn't exist at all yet: unlike the synthetic schema,
+    `mis.*` is only created by db/real_data/ingest.py, which itself only
+    runs when the real dataset's CSVs are present (see docker-compose.yml's
+    `seed` comment) -- so a fresh clone without that (gitignored, host-only)
+    dataset never gets `mis.trip` created, and every detector would
+    otherwise raise UndefinedTable on every scheduler tick instead of just
+    quietly returning no signals like an empty table does."""
     if since is not None:
         return since
     contract = get_contract()
     trip = contract.entity("trip")
+    if conn.execute(text("SELECT to_regclass(:t)"), {"t": trip.table}).scalar() is None:
+        return _utcnow() - DEFAULT_LOOKBACK
     anchor = conn.execute(
         text(f"SELECT MAX({trip.column('actual_departure')}) FROM {trip.table} WHERE {trip.column('org_id')} = :org_id"),
         {"org_id": org_id},
