@@ -22,7 +22,7 @@ import argparse
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psycopg
@@ -88,6 +88,7 @@ _TS_COLUMNS: dict[str, list[str]] = {
     "cost": ["cost_date"],
     "incident": ["occurred_at", "reported_at", "acknowledge_time"],
     "emission": ["log_date"],
+    "commute": ["log_date", "boarding_time", "alighting_time"],
 }
 
 
@@ -101,7 +102,9 @@ def _fetch_trip_cluster(conn: psycopg.Connection, trip_id: int) -> dict[str, Any
         incidents = cur.fetchall()
         cur.execute("SELECT * FROM mis.emission WHERE trip_id = %s", (trip_id,))
         emissions = cur.fetchall()
-    return {"trip": trip, "costs": costs, "incidents": incidents, "emissions": emissions}
+        cur.execute("SELECT * FROM mis.commute WHERE trip_id = %s", (trip_id,))
+        commutes = cur.fetchall()
+    return {"trip": trip, "costs": costs, "incidents": incidents, "emissions": emissions, "commutes": commutes}
 
 
 def _shift(row: dict[str, Any], columns: list[str], delta) -> dict[str, Any]:
@@ -126,17 +129,38 @@ def _insert_row(conn: psycopg.Connection, table: str, row: dict[str, Any], *, id
         return cur.fetchone()[0]
 
 
-def replay_one(conn: psycopg.Connection, trip_id: int, now: datetime) -> dict[str, Any]:
+def replay_one(
+    conn: psycopg.Connection,
+    trip_id: int,
+    now: datetime,
+    *,
+    preserve_time_of_day: bool = False,
+) -> dict[str, Any]:
     cluster = _fetch_trip_cluster(conn, trip_id)
     trip = cluster["trip"]
     if trip is None:
         raise ValueError(f"trip {trip_id} not found")
 
     anchor = trip.get("actual_departure") or trip.get("scheduled_departure")
-    delta = now - anchor
+    if preserve_time_of_day and anchor is not None:
+        # Keep the original time-of-day (e.g. a 21:13 late-night drop) rather
+        # than collapsing every timestamp onto wall-clock "now". Hour-of-day-
+        # sensitive detectors -- specifically escort_compliance's 21:00-06:00
+        # night window (sense/nodes.py) -- only fire when actual_departure
+        # still lands in that window, which a plain `now - anchor` shift
+        # destroys when the demo is run during the day. Land the cluster on the
+        # most recent PAST date that preserves the original clock time, so it's
+        # both recent (inside the detector's lookback) and still late-night.
+        candidate = anchor.replace(year=now.year, month=now.month, day=now.day)
+        if candidate > now:
+            candidate = candidate - timedelta(days=1)
+        delta = candidate - anchor
+    else:
+        delta = now - anchor
 
     new_trip = _shift(trip, _TS_COLUMNS["trip"], delta)
-    new_trip["trip_date"] = now.date()
+    shifted_departure = new_trip.get("actual_departure") or new_trip.get("scheduled_departure")
+    new_trip["trip_date"] = shifted_departure.date() if shifted_departure else now.date()
     new_trip["source_month"] = f"replay-{now.strftime('%Y-%m')}"
     # mis.trip.id has no sequence default (ingest assigns ids explicitly) --
     # generate one in a range well clear of the real ~1M-5M dataset.
@@ -145,7 +169,7 @@ def replay_one(conn: psycopg.Connection, trip_id: int, now: datetime) -> dict[st
         new_trip["id"] = cur.fetchone()[0]
     new_trip_id = _insert_row(conn, "mis.trip", new_trip, id_column="id", explicit_id=True)
 
-    result = {"source_trip_id": trip_id, "new_trip_id": new_trip_id, "costs": [], "incidents": [], "emissions": []}
+    result = {"source_trip_id": trip_id, "new_trip_id": new_trip_id, "costs": [], "incidents": [], "emissions": [], "commutes": []}
 
     for cost in cluster["costs"]:
         new_cost = _shift(cost, _TS_COLUMNS["cost"], delta)
@@ -161,8 +185,18 @@ def replay_one(conn: psycopg.Connection, trip_id: int, now: datetime) -> dict[st
     for emission in cluster["emissions"]:
         new_emission = _shift(emission, _TS_COLUMNS["emission"], delta)
         new_emission["trip_id"] = new_trip_id
-        new_emission["log_date"] = now.date()
+        new_emission["log_date"] = new_trip["trip_date"]
         result["emissions"].append(_insert_row(conn, "mis.emission", new_emission))
+
+    # Replay the rider legs too: the escort-compliance detector joins
+    # mis.trip -> mis.commute -> mis.employee (a female rider on an unescorted
+    # late-night LOGOUT), so without the commute leg the injected trip is
+    # invisible to it. mis.commute.id is BIGSERIAL, so let the DB assign it
+    # (explicit_id defaults to False); employee_id/route_id already exist.
+    for commute in cluster["commutes"]:
+        new_commute = _shift(commute, _TS_COLUMNS["commute"], delta)
+        new_commute["trip_id"] = new_trip_id
+        result["commutes"].append(_insert_row(conn, "mis.commute", new_commute))
 
     conn.commit()
     return result

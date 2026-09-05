@@ -33,7 +33,7 @@ Large effort decomposed into four sub-projects. **Sequence: A → B → C (→ D
 - [x] Scrubber/timeframe — All / Last 15m / Last 1h filter over retained feed history. (Scoped simple, per decision.)
 - [x] Flip off mock data — `VITE_USE_MOCK=false`; **verified real vanta-Aus data renders** (escort cards, 443-min delay).
 - [x] Additive only — new components + hook + `demo.py`; no dashboard/chart/color-system edits.
-- FOLLOW-UP (small): `replay.py` copies trip+cost+incident+emission but NOT the linked `commute`/`employee` rows, so the `escort_violation` scenario doesn't fire its detector (only `delay_spike` fully lights up). Extend `_fetch_trip_cluster` to also replay commute/employee for the escort demo.
+- [x] FOLLOW-UP DONE: `replay.py` now also replays the `commute` leg (so the escort detector's trip→commute→employee join resolves) AND, for `escort_violation`, preserves the original late-night time-of-day (a `now - anchor` shift moved trips out of the 21:00-06:00 window). **Verified: all four scenarios now fire their target signal (delay_breach, escort_compliance_violation, billing_discrepancy, emissions_over_target).**
 
 ### SP-A open questions to resolve at design time
 - Which persona/org to wire first for the demo? (Data suggests **vanta-Sea** for the safety story — most incidents + ~28K real escort violations; **pinnacle-Slc** for volume/feedback.)

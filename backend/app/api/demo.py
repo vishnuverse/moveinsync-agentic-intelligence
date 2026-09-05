@@ -122,9 +122,13 @@ def replay(body: ReplayRequest) -> ReplayResponse:
                     "ingest real data first (backend/db/real_data/ingest.py)"
                 ),
             )
+        # escort_violation is the one scenario whose detector is hour-of-day
+        # sensitive (late-night 21:00-06:00 window) -- preserve the original
+        # clock time when re-timestamping so the injected trip stays late-night.
+        preserve_tod = body.scenario == "escort_violation"
         for trip_id in candidates:
             now = datetime.now(timezone.utc)
-            result = replay_mod.replay_one(conn, trip_id, now)
+            result = replay_mod.replay_one(conn, trip_id, now, preserve_time_of_day=preserve_tod)
             injected.append(result["source_trip_id"])
             new_trip_ids.append(result["new_trip_id"])
     except HTTPException:
