@@ -190,23 +190,42 @@ src/agents/
 
 ---
 
-## 🏗️ Solution Architecture
+## 🏗️ System Architecture
 
-The solution is built on agentic AI principles with the following components:
+The solution is built on enterprise agentic AI principles, featuring a full-stack, event-driven architecture that seamlessly connects real-time data streams to autonomous reasoning and live dashboard visualizations.
 
-- **Intelligence Layer** - Autonomous agents for data analysis and decision-making
-- **Reporting Engine** - Real-time and scheduled report generation
-- **Integration Hub** - Connect with existing enterprise systems
-- **Analytics Dashboard** - Visualization of key metrics and insights
+![System Architecture](assets/architechture_diagram.png)
 
-## 🏗️ Architecture
+### Key Architectural Layers
 
-The solution is built on agentic AI principles with the following components:
+- **Presentation Layer (React + Vite)**: Role-tailored dashboards for Transport Manager, Line Manager, and Transport Head with real-time SSE/WebSocket streaming, an interactive AI Chat Assistant, and an Agent Execution Trace Drawer.
+- **API & Middleware Layer (FastAPI)**: REST endpoints, SSE/WebSocket notification streaming, and background daemon schedulers.
+- **Agentic Intelligence Layer (LangGraph)**: Stateful multi-agent state machine coordinating Sense → Reason → Act execution flows with checkpointers.
+- **Data & Messaging Tier (PostgreSQL + Redis)**: PostgreSQL 16 with `pgvector` for transportation fact tables (`mis.*`), trace logs, and state checkpoints; Redis 7 for high-throughput event pub/sub and caching.
 
-- **Intelligence Layer** - Autonomous agents for data analysis and decision-making
-- **Reporting Engine** - Real-time and scheduled report generation
-- **Integration Hub** - Connect with existing enterprise systems
-- **Analytics Dashboard** - Visualization of key metrics and insights
+---
+
+## 🤖 Agent Subgraph (Sense → Reason → Act)
+
+The core intelligence layer operates as a stateful multi-agent system built with **LangGraph**, dividing complex operational tasks into three specialized subgraphs:
+
+![Agent Subgraph](assets/agent_graph.png)
+
+### 1. 🔍 Sense Subgraph
+- **Data Listener**: Ingests live ride streams, driver alerts, vendor bills, and trip feedback.
+- **Pattern & Anomaly Detector**: Detects timeliness deviations, missing night safety escorts, vendor SLA drops, and carbon emission spikes.
+
+### 2. 🧠 Reason Subgraph
+- **Root Cause Analyzer (LLM)**: Performs multi-factor analysis to determine why an event occurred.
+- **Natural Language SQL Agent**: Generates and executes target queries against `mis.*` database tables.
+- **Business Impact Calculator**: Quantifies financial loss, safety risk levels, and SLA penalty impact.
+
+### 3. ⚡ Act Subgraph
+- **Communication Drafter**: Generates role-tailored notifications and dispatch escalation alerts.
+- **HTML Report Agent**: Compiles executive briefs and markdown/HTML reports with summary tables.
+- **Redis Publisher**: Emits real-time notification streams and trace updates to frontend listeners.
+
+---
 
 ## 🚀 Getting Started
 
