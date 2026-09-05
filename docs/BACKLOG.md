@@ -58,7 +58,7 @@ Large effort decomposed into four sub-projects. **Sequence: A → B → C (→ D
 - [ ] Wire the built-but-dormant **LangMem memory** into live reason/act prompts (recall exists, never injected).
 - [ ] Predictive signal (forecast delay/cost breach) — flips reactive → proactive; pairs with external enrichment.
 - [ ] External enrichment (weather/traffic) — research agent is a curated lookup, not web/API search.
-- [ ] Fix README + real architecture diagram (current docs are the hackathon template, undersell the real system).
+- [x] Fix README + real architecture diagram (current docs are the hackathon template, undersell the real system). **DONE (PR fixing github.com/vishnuverse/moveinsync-agentic-intelligence#1):** README.md, docs/ARCHITECTURE.md (real Mermaid diagram), docs/PROJECT_OVERVIEW.md rewritten to describe the actual system; docs/PROBLEM_STATEMENT.md re-synced verbatim to requirementsProvided/customerOriginalRequirements.md (it had drifted into hackathon-platform boilerplate); README links the live demo (app.inferencezero.com) after confirming no secrets reach the Vite client bundle (only VITE_-prefixed vars are exposed; API keys/DATABASE_URL/REDIS_URL are backend-only).
 - [x] Latent bug RESOLVED: the synthetic `triggers.sql` (NOTIFY on `public.route_trips` etc.) was removed entirely as part of the synthetic-schema teardown — the event path now relies solely on `real_data/triggers.sql` on `mis.*`. See §7.
 - [ ] Config-drive sense thresholds per-org (currently hardcoded constants).
 - [ ] Multi-tenancy seam (loop N orgs, scoped principal), per-tenant token-based LLM budget + response cache (auth/CORS are demo-open today).

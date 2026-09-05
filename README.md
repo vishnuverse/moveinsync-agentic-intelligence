@@ -1,262 +1,86 @@
-# Team: Sudo
-# MoveInSync - Agentic Intelligence for Enterprise Mobility
+# MoveInSync-AIR — Agentic Intelligence & Reporting Layer
 
-> **Reimagining how enterprises manage employee transportation at scale.**
+**Team: Sudo**
 
-Building intelligent agents that **SENSE**, **REASON**, and **ACT** to transform enterprise employee mobility operations.
+An agentic layer for enterprise employee mobility that **senses** operational
+events as they happen, **reasons** about their business impact, and **acts**
+— autonomously where safe, with human sign-off where it isn't. Built for the
+MoveInSync hackathon problem statement (see
+[`docs/PROBLEM_STATEMENT.md`](docs/PROBLEM_STATEMENT.md) for the original
+brief this repo is scored against).
 
----
+**Live demo:** https://app.inferencezero.com — running against the same
+anonymised sample dataset as local development, no live third-party system
+access.
 
-## 🌍 About MoveInSync
-
-**MoveInSync** is the world's largest office, commute, and workplace management platform. We manage the complete employee journey from doorstep to office to home.
-
-### Our Scale
-- **1M+ employees** managed daily
-- **400+ organizations** served
-- **120+ Fortune 500 companies** as clients
-- **24/7 live data streams** across all dimensions
-
----
-
-## 🎯 The Challenge
-
-### The Problem
-
-Every day, MoveInSync processes massive amounts of transportation and mobility data covering:
-- **Timeliness** - Are employees arriving on schedule?
-- **Safety** - Are journeys secure and incident-free?
-- **Cost** - What is the transportation ROI?
-- **Vendor Performance** - How are logistics partners performing?
-- **Carbon Emissions** - What is our environmental impact?
-
-However, **live data streams 24/7**, and traditional dashboards cannot keep pace with the volume and velocity. Decision-makers need intelligence, not just data.
-
-### The Solution Challenge
-
-**Build an agentic layer that can:**
-
-1. **🔍 SENSE** - Understand what is happening in real-time transportation data
-2. **🧠 REASON** - Determine why events are occurring and what they mean  
-3. **⚡ ACT** - Take autonomous or guided actions to optimize outcomes
-
-All with **minimal human prompting or interaction**.
+For the full technical picture (real architecture diagram, per-component
+detail, data flow, cost/scale notes), see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). This README covers what the
+system is and how to run it.
 
 ---
 
-## 👥 Target Personas
+## What it does
 
-Your solution must serve one or more of these three personas:
+Three personas share one backend and one dataset, re-scoped by role — not
+three separate apps:
 
-### 1. 🚕 Transport Manager
-**Real-time operational control and tactical optimization**
-- Monitor route on-time performance and SLA compliance
-- Get immediate alerts for delays and incidents
-- Optimize routes and vendor allocation in real-time
-- Daily tactical decision-making
+- **Transport Manager** — live safety/delay alerts, escort-compliance
+  monitoring, same-day operational view.
+- **Line Manager** — commute-attendance correlation for their team, isolating
+  transport-caused delay from employee no-shows.
+- **Transport & Facilities Head** — billing-slab discrepancy auditing,
+  sustainability/EV-transition tracking, leadership-ready reports.
 
-### 2. 👔 Line Manager  
-**Team-level insights and compliance**
-- Track team member commute patterns
-- Correlate commute issues with attendance
-- Monitor team transportation costs
-- Ensure safety and compliance reporting
+A natural-language chat interface answers ad-hoc questions across all of the
+above (grounded in a real generated-SQL trail, not a canned response), and a
+live event feed shows the sense→reason→act loop reacting to real data in
+real time.
 
-### 3. 🎯 Transport Head
-**Strategic insights and leadership reporting**
-- Analyze monthly/quarterly trends and KPIs
-- Evaluate vendor performance and partnerships
-- Track sustainability and carbon footprint goals
-- Make long-term strategic decisions
+Every metric card carries a `context_note` — at least one reference point
+(historical trend, SLA/goal, or peer/vendor attribution), not a bare number.
 
----
+## Architecture, in one sentence
 
-## 📋 Requirements Framework
+`Postgres LISTEN/NOTIFY` → **sense** (9 anomaly/compliance detectors) →
+**reason** (LangGraph subgraph: SQL agent + research agent + impact context +
+root-cause synthesis) → **act** (LangGraph subgraph with a real
+`interrupt()` human-approval gate) → Redis pub/sub → WebSocket/SSE → the
+React dashboard, live, with no polling. Full diagram and per-component
+breakdown: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-### 🔴 MANDATORY Requirements (All 4 Required)
+## Tech stack
 
-1. ✅ **Runs on Sample Dataset** - Works with provided or generated transportation data
-2. ✅ **Sense → Reason → Act** - Demonstrates the complete agent decision-making flow
-3. ✅ **Serves One Persona** - Tailored insights and actions for transport manager, line manager, or transport head
-4. ✅ **Context-Rich Metrics** - Every metric includes business impact, trend, and urgency
+FastAPI (Python) + LangGraph + LangMem · PostgreSQL · Redis · React/Vite/TypeScript
+· Docker Compose · Cloudflare Tunnel for public exposure. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#technology-stack) for the full
+table and why each piece is there.
 
-### 🟡 GOOD-TO-HAVE Features
-
-- Handles messy/incomplete data gracefully
-- Triggers actions autonomously without prompting
-- Generates leadership-ready reports without manual editing
-
-### 🎁 BONUS Features
-
-- Multi-persona support
-- Real-time data streaming
-- Predictive analytics
-- Natural language interaction
-- Mobile-friendly interfaces
-- Enterprise system integration
-
----
-
-## 🛠️ Tech Stack
-
-### Preferred Stack (Not Required)
-- **Backend:** Java
-- **Frontend:** Angular  
-- **Infrastructure:** AWS
-
-### Use Any Stack
-Pick what you're comfortable with. Focus on solving the problem, not technology choice.
-
----
-
-## 📊 Key Data Domains
-
-Your agent should reason across these dimensions:
-
-- **Timeliness** - On-time performance, delays, adherence
-- **Safety** - Incident tracking, risk zones, driver ratings
-- **Cost** - Per-route, per-employee, trend analysis
-- **Vendor Performance** - SLA compliance, quality metrics, reliability
-- **Sustainability** - Carbon footprint, emissions trends, green optimization
-
----
-
-## 🤖 Agent Design Framework
-
-Your agent should follow this architecture pattern:
-
-### Sense Layer
-```
-Transportation Data → Data Aggregation → Pattern Detection
-```
-- Ingest live and historical transportation data
-- Normalize and validate data quality
-- Detect anomalies, patterns, and significant events
-
-### Reason Layer  
-```
-Patterns → Root Cause Analysis → Business Impact Assessment
-```
-- Analyze why events are occurring
-- Correlate multiple data sources
-- Quantify business impact (cost, safety, compliance, efficiency)
-- Generate context and narrative for insights
-
-### Act Layer
-```
-Insights → Decision Logic → Actions/Recommendations
-```
-- Recommend specific actions based on reasoning
-- Trigger alerts for critical situations
-- Propose operational changes (route optimization, vendor changes, etc.)
-- Generate persona-specific reports and visualizations
-
-### Recommended Folder Structure
-```
-src/agents/
-├── sensor/
-│   ├── data-collector.js      # Ingest data
-│   ├── data-validator.js      # Quality checks
-│   └── pattern-detector.js    # Find signals
-├── reasoner/
-│   ├── analyzer.js            # Root cause analysis
-│   ├── impact-calculator.js   # Quantify business impact
-│   └── context-builder.js     # Build narratives
-├── actor/
-│   ├── decision-engine.js     # Decision logic
-│   ├── action-trigger.js      # Trigger actions
-│   └── report-generator.js    # Generate outputs
-└── orchestrator.js            # Coordinate sense→reason→act
-```
-
----
-
-## 📸 Visual Reference
-
-### Judging Criteria
-![Judging Criteria](docs/judging_criteria.png "Hackathon Judging Criteria")
-
-### Solution Forms
-![Solution Forms](docs/solution%20forms.png "Acceptable Solution Approaches")
-
----
-
-## 📚 Detailed Resources
-
-- **[Full Problem Statement](docs/PROBLEM_STATEMENT.md)** - Complete requirements, personas, and success criteria
-- **[Problem Explanation Video](https://drive.google.com/file/d/1B7nLPnQuZwYTr6PoTwAd_5PAcJCsFz-l/view)** - Watch Udual Trii (VP Product) explain the challenge
-- **[Use Case Document](https://hackcultureplatform.blob.core.windows.net/event-assets/hackathons/6a429905623dd6dbd3249f0e/problem_explanation_7qdzf3jxklt.pdf)** - Detailed use case and examples
-- **[Architecture Guide](docs/ARCHITECTURE.md)** - Technical architecture and component design
-
----
-
-## 🏗️ Solution Architecture
-
-The solution is built on agentic AI principles with the following components:
-
-- **Intelligence Layer** - Autonomous agents for data analysis and decision-making
-- **Reporting Engine** - Real-time and scheduled report generation
-- **Integration Hub** - Connect with existing enterprise systems
-- **Analytics Dashboard** - Visualization of key metrics and insights
-
-## 🏗️ Architecture
-
-The solution is built on agentic AI principles with the following components:
-
-- **Intelligence Layer** - Autonomous agents for data analysis and decision-making
-- **Reporting Engine** - Real-time and scheduled report generation
-- **Integration Hub** - Connect with existing enterprise systems
-- **Analytics Dashboard** - Visualization of key metrics and insights
-
-## 🚀 Getting Started
+## Running it
 
 ### Prerequisites
+- Docker + Docker Compose
 
-- Git
-- Your preferred language runtime (Node.js, Python, Java, etc.)
-- IDE or code editor
-
-### Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/vishnuverse/moveinsync-agentic-intelligence.git
-cd moveinsync-agentic-intelligence
-
-# Review the challenge
-cat docs/PROBLEM_STATEMENT.md
-
-# Watch the problem explanation
-# Visit: https://drive.google.com/file/d/1B7nLPnQuZwYTr6PoTwAd_5PAcJCsFz-l/view
-
-# Start building your agent
-# Implement in src/agents/ directory
-```
-
-### Running the Full Stack (Docker)
+### Quick start (synthetic reference data only)
 
 ```bash
 docker compose up --build
 ```
 
-This boots postgres, redis, the backend/scheduler, the frontend, and a
-Cloudflare Tunnel — see the header comment in
-[`docker-compose.yml`](docker-compose.yml) for the public URL. The app works
-out of the box on generated synthetic data; no dataset download is required
-to run it.
+This boots Postgres, Redis, the backend API, the scheduler (sense/reason/act
+autonomy loop), the frontend, and a Cloudflare Tunnel. The app works out of
+the box without the real dataset — see
+[`docker-compose.yml`](docker-compose.yml) for the local ports and tunnel
+config.
 
-#### Optional: real dataset
+### Running against the real (anonymised) dataset
 
-To run against the real (anonymised) MoveInSync dataset described in
-[`data/Dictionary/README.md`](data/Dictionary/README.md) instead of synthetic
-data:
+The dashboards, sense detectors, and demo scenarios are built for the real
+MoveInSync sample dataset, not the synthetic placeholder — use this for an
+actual demo.
 
-1. Download the dataset from
-   [this Google Drive folder](https://drive.google.com/drive/folders/1RXRWwqeoai6rNbzMp8W4ZMIcWT_u1VGj)
-   (**not included in this repo**: at ~670MB total, with one file over
-   GitHub's 100MB per-file limit, it can't be committed).
-2. Place the CSVs directly in `data/` at the repo root (gitignored — they
-   stay local, never get committed):
+1. Place the dataset CSVs in `data/` at this repo's root (gitignored — they
+   stay local, never committed):
    ```
    data/
    ├── Ride_data _trip-may_2026.csv
@@ -267,155 +91,84 @@ data:
    ├── alerts_data.csv
    └── trip_feedback.csv
    ```
-3. Run `docker compose up --build`. The `seed` service ingests real data
-   automatically **the first time** it finds these files with an empty
-   database. On every later `docker compose up` (restart, code change, etc.)
-   it skips re-ingesting since the data's already there — so this is a
-   one-time step, not something that reruns on every boot. To force a full
-   re-ingest, drop the postgres volume first: `docker compose down -v`.
+   Field-level documentation for each file lives in
+   [`data/Dictionary/`](data/Dictionary/) once placed (see
+   [`backend/db/real_data/README.md`](backend/db/real_data/README.md) for the
+   ingestion pipeline itself).
+2. Run `docker compose up --build`. The `seed` service ingests the real data
+   automatically the first time it finds these files against an empty
+   database. On every later `docker compose up` it skips re-ingesting (data's
+   already there) — to force a full re-ingest, drop the Postgres volume first:
+   `docker compose down -v`.
+3. Optional: to see the live sense→reason→act loop react to a fresh event
+   instead of only the historically-seeded state, replay a real trip with
+   today's timestamp:
+   ```bash
+   DATABASE_URL=$DATABASE_URL python backend/db/real_data/replay.py --scenario delay_spike --count 5 --interval-seconds 3
+   ```
+   See [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) for the full walkthrough
+   (including the interrupt/approval flow) mapped to each judging criterion.
 
-### Development Workflow
+### Local development (without Docker)
 
-1. **Choose your persona** - Transport manager, line manager, or transport head
-2. **Design your agent** - Plan sense → reason → act flow
-3. **Implement using your stack** - Java, Node.js, Python, or your choice
-4. **Create sample data** - Generate or use provided transportation data
-5. **Test and iterate** - Validate against all mandatory requirements
-6. **Document and demo** - Prepare clear explanation of your solution
+- **Backend:** `cd backend && pip install -r requirements.txt`, then run the
+  FastAPI app (`app/main.py`) and scheduler (`app/schedulers/main.py`)
+  against a local Postgres + Redis. Copy `backend/.env.example` to
+  `backend/.env` and fill in `DATABASE_URL`, `REDIS_URL`, and an LLM provider
+  key.
+- **Frontend:** `cd frontend && npm install && npm run dev` (Vite dev server;
+  `npm run build` for a production build). Copy `frontend/.env.example` to
+  `frontend/.env` to point it at a running backend.
+- **Tests:** `backend/tests/golden_qa.py` is the golden Q&A regression set for
+  the chat/SQL-agent path.
 
-## 📦 Project Structure
+## Project structure
 
 ```
 moveinsync-agentic-intelligence/
-├── README.md                    # Main documentation
-├── src/
-│   ├── agents/                  # Your agent implementation
-│   │   ├── sensor/              # Data ingestion & pattern detection
-│   │   ├── reasoner/            # Analysis & impact assessment
-│   │   ├── actor/               # Action triggering & reporting
-│   │   └── orchestrator.js      # Coordinate sense→reason→act
-│   ├── api/                     # API endpoints
-│   ├── services/                # Core services
-│   └── utils/                   # Utilities
-├── docs/
-│   ├── PROBLEM_STATEMENT.md     # Complete requirements & personas
-│   ├── ARCHITECTURE.md          # Technical architecture
-│   ├── judging_criteria.png     # Judging framework
-│   └── solution_forms.png       # Solution approaches
-├── tests/                       # Test suite
-└── sample-data/                 # Sample transportation data (create as needed)
+├── backend/
+│   ├── app/
+│   │   ├── graph/           # sense/, reason/, act/ — the LangGraph pipeline
+│   │   ├── api/              # FastAPI routes (dashboard, chat, ws, sse, ...)
+│   │   ├── memory/           # LangMem episodic/semantic/procedural stores
+│   │   ├── llm/               # LLM provider + Redis-backed cost circuit breaker
+│   │   ├── schedulers/       # interval poll + LISTEN/NOTIFY bridge
+│   │   ├── services/         # dashboard/report/notification query layers
+│   │   └── contracts/        # data_contract.yaml loader
+│   ├── config/data_contract.yaml   # logical→physical schema mapping (retarget DB here)
+│   ├── db/                    # schema, migrations, real_data ingestion + seed
+│   └── tests/
+├── frontend/
+│   └── src/
+│       ├── dashboards/       # per-persona dashboards
+│       ├── pages/            # Live, Chat, Notifications, Activity, Outbox
+│       ├── components/       # LiveEventFeed, charts, shared UI
+│       └── api/               # REST/WS/SSE clients
+├── docs/                      # architecture, PRD, backlog, demo runbook
+├── cloudflared/               # tunnel routing config
+└── docker-compose.yml
 ```
 
-## 🛠️ Tech Stack Options
+## Documentation map
 
-### Preferred Stack (Recommended but not Required)
-- **Backend:** Java with Spring Boot
-- **Frontend:** Angular
-- **Infrastructure:** AWS (Lambda, RDS, S3)
-- **AI/ML:** Claude API for reasoning layer
+- [`docs/PROBLEM_STATEMENT.md`](docs/PROBLEM_STATEMENT.md) — the original
+  hackathon brief this system is built and scored against.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — real architecture diagram,
+  component detail, data flow, cost/scale notes.
+- [`docs/moveinsync-prd-v3.md`](docs/moveinsync-prd-v3.md) — the detailed
+  internal feature-by-feature PRD (persona → sense → reason → act mapping,
+  measurement protocols, expected outcomes).
+- [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) — live-demo walkthrough
+  mapped to each official judging criterion.
+- [`docs/BACKLOG.md`](docs/BACKLOG.md) — actively-maintained list of what's
+  built, designed-but-not-built, and explicitly out of scope. The
+  source of truth for current gaps — check here before assuming something
+  is or isn't done.
 
-### Fully Flexible
-Use Node.js, Python, Go, C#, or any technology you prefer. The focus is on solving the challenge, not the stack.
+## Contributing
 
-## 📊 Sample Data
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Create a `sample-data/` directory with example transportation data:
+## License
 
-```json
-{
-  "routes": [
-    {
-      "id": "route-001",
-      "name": "Downtown Route A",
-      "distance_km": 25.5,
-      "scheduled_duration_min": 45,
-      "scheduled_departure": "2026-09-04T08:00:00Z",
-      "actual_departure": "2026-09-04T08:05:00Z",
-      "scheduled_arrival": "2026-09-04T08:45:00Z",
-      "actual_arrival": "2026-09-04T08:58:00Z"
-    }
-  ],
-  "metrics": {
-    "timeliness_score": 0.92,
-    "safety_incidents": 0,
-    "cost_per_employee": 12.50,
-    "carbon_emissions_kg": 145.2
-  }
-}
-```
-
-## ✅ Success Checklist
-
-Before submitting your solution, ensure:
-
-- [ ] Solution runs on sample transportation data
-- [ ] Agent demonstrates SENSE → REASON → ACT flow
-- [ ] Solution targets one persona (transport manager, line manager, or transport head)
-- [ ] Every metric includes context (business impact, trend, urgency)
-- [ ] Code is clean, documented, and maintainable
-- [ ] README includes clear instructions to run the solution
-- [ ] You can explain your agent's reasoning in 5 minutes
-
-## 🎯 Evaluation Criteria
-
-Solutions will be judged on:
-
-1. **Does It Work?** - Runs without errors, meets all mandatory requirements
-2. **Does It Land?** - Provides genuine value to target persona, insights are actionable
-3. **Can It Scale?** - Architecture supports enterprise scale, code is maintainable
-
-## 📚 Example Agent Scenarios
-
-### Transport Manager's Morning Brief
-1. **SENSE:** Analyze overnight scheduling, weather, historical patterns
-2. **REASON:** Identify high-delay-risk routes; flag vendor issues
-3. **ACT:** Send dispatch alerts, suggest backup vendors, optimize routes
-
-### Line Manager's Weekly Report
-1. **SENSE:** Aggregate team commute data and attendance patterns
-2. **REASON:** Correlate commute issues with absences; spot cost outliers
-3. **ACT:** Flag compliance issues, suggest improvements, track trends
-
-### Transport Head's Monthly Strategy
-1. **SENSE:** Aggregate performance across all routes, vendors, regions
-2. **REASON:** Identify strategic trends, vendor performance, ROI
-3. **ACT:** Generate executive summary, recommend policy changes, suggest partnerships
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow the development guidelines in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## 📄 License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
-
-## 📞 Questions & Support
-
-### For Hackathon Participants
-- Review [PROBLEM_STATEMENT.md](docs/PROBLEM_STATEMENT.md) for detailed requirements
-- Watch the [problem explanation video](https://drive.google.com/file/d/1B7nLPnQuZwYTr6PoTwAd_5PAcJCsFz-l/view)
-- Check the [use case document](https://hackcultureplatform.blob.core.windows.net/event-assets/hackathons/6a429905623dd6dbd3249f0e/problem_explanation_7qdzf3jxklt.pdf)
-- Open an issue if you have questions
-
----
-
-## 🚀 Let's Build Agents That Can Act!
-
-This is your chance to build intelligent automation that transforms enterprise operations. The challenge is open-ended by design—bring your creativity, focus on the user, and build something that actually works.
-
-**Remember:**
-- Start simple, iterate fast
-- Focus on the persona, not the technology
-- Every decision should be defensible
-- Clean code beats clever code
-- Document your reasoning
-
-Good luck! 🎉
-
----
-
-**Hackathon Theme:** Agentic AI  
-**Domain:** Enterprise Mobility / Operations Intelligence  
-**Last Updated:** September 4, 2026
+MIT — see [LICENSE](LICENSE).

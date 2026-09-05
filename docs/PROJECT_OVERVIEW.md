@@ -1,50 +1,53 @@
-# MoveInSync - Project Overview
+# MoveInSync-AIR — Project Overview
 
-## Problem Statement
+## The problem (official brief)
 
-Enterprise transportation management at scale requires intelligent automation to handle:
-- Route optimization
-- Cost analysis and reporting
-- Real-time tracking and analytics
-- Compliance and audit trails
-- Decision-making intelligence
+Large enterprises move a few hundred to a few thousand employees daily
+through a mix of home/nodal pick-and-drop cabs and fixed-route shuttles.
+Transport managers are accountable for cost, safety, experience, and
+sustainability — but most of their time goes into assembling data, not
+acting on it. A metric without context is just a number: "OTA is 78%"
+matters far less than "it was 85% last month, SLA is 90%, and two vendors
+are responsible for the gap." That benchmarking is currently absent. See
+[`PROBLEM_STATEMENT.md`](PROBLEM_STATEMENT.md) for the full official brief.
 
-## Solution Approach
+## What we built
 
-MoveInSync leverages agentic AI to create an autonomous reporting and intelligence layer that:
+An agentic layer that senses operational events in the real (anonymised)
+MoveInSync dataset, reasons about their business impact against a reference
+point, and acts — autonomously where the action is reversible and
+high-confidence, with a human-approval gate (LangGraph `interrupt()`) where
+it isn't.
 
-1. **Autonomously processes** transportation data
-2. **Generates insights** through intelligent analysis
-3. **Automates reporting** for stakeholders
-4. **Optimizes operations** through ML-driven recommendations
+It serves all three named personas from one shared backend and dataset,
+re-scoped by role rather than built as three separate apps:
 
-## Key Components
+- **Transport Manager (operational):** live escort-compliance and safety
+  monitoring, delay/incident alerts, same-day operational view.
+- **Line Manager (team-level):** commute-attendance correlation, isolating
+  transport-caused delay from genuine no-shows for their team.
+- **Transport & Facilities Head (strategic):** billing-slab discrepancy
+  auditing with a real ₹ recovery number, sustainability/EV-transition
+  tracking, leadership-ready generated reports.
 
-### Agentic Layer
-- Autonomous agents for specific operational domains
-- Decision-making without explicit programming
-- Continuous learning and adaptation
+A conversational agent (NL Q&A, grounded in generated SQL shown alongside the
+answer) and a live event feed (sense→reason→act reacting to real data with
+no polling) sit across all three.
 
-### Intelligence Engine
-- Data aggregation from multiple sources
-- Pattern recognition and anomaly detection
-- Predictive analytics for optimization
+For the full feature-by-feature blueprint — sense/reason/act logic, exact
+data fields, and measurement protocols per feature — see
+[`moveinsync-prd-v3.md`](moveinsync-prd-v3.md). For the real architecture
+and how these pieces connect, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-### Reporting System
-- Automated report generation
-- Customizable dashboards
-- Real-time alerting
+## Where we stand against the official requirements
 
-## Success Metrics
+All four mandatory requirements are met, all three good-to-have items are
+met, and the deployability/leadership-output bonus items are addressed. This
+is tracked, kept current, and re-verified (not just asserted once) in
+[`BACKLOG.md`](BACKLOG.md) — that document, not this one, is the place to
+check what's actually built today versus still open.
 
-- Operational efficiency improvements
-- Cost reduction
-- Decision-making speed
-- System reliability and uptime
+## Live demo
 
-## Timeline
-
-- **Week 1:** Foundation and architecture
-- **Week 2:** Core agent implementation
-- **Week 3:** Integration and testing
-- **Week 4:** Polish and demo preparation
+**https://app.inferencezero.com** — the running system, on the same
+anonymised sample dataset used locally.
