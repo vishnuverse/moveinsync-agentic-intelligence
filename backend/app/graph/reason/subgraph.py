@@ -38,6 +38,16 @@ def _route_after_specialist(state: ReasonState) -> list[str] | str:
     return "impact_context_builder"
 
 
+def _route_after_impact_context(state: ReasonState) -> str:
+    """SP-B gate (plan §1e): `gate_mode == "rule_only"` (set by
+    app.graph.reason.gate.evaluate_gate, via supervisor.run_pipeline ->
+    graph.py's reason_node) skips root_cause_synthesizer -- the ONLY LLM call
+    in this subgraph -- entirely, routing to the templated
+    rule_based_decision node instead. Any other value (including the
+    default, unset case) takes today's existing LLM path, unchanged."""
+    return "rule_based_decision" if state.get("gate_mode") == "rule_only" else "root_cause_synthesizer"
+
+
 def build_reason_subgraph() -> StateGraph:
     """Returns an uncompiled StateGraph -- call `.compile()` (with or without
     a checkpointer/store) before invoking, same convention as
@@ -49,14 +59,18 @@ def build_reason_subgraph() -> StateGraph:
     graph.add_node("call_sql_agent", nodes.call_sql_agent)
     graph.add_node("call_research_agent", nodes.call_research_agent)
     graph.add_node("impact_context_builder", nodes.impact_context_builder)
+    graph.add_node("rule_based_decision", nodes.rule_based_decision)
     graph.add_node("root_cause_synthesizer", nodes.root_cause_synthesizer)
 
     graph.add_edge(START, "route_to_specialist")
     graph.add_conditional_edges("route_to_specialist", _route_after_specialist, _SPECIALIST_DESTINATIONS)
     graph.add_edge("call_sql_agent", "impact_context_builder")
     graph.add_edge("call_research_agent", "impact_context_builder")
-    graph.add_edge("impact_context_builder", "root_cause_synthesizer")
+    graph.add_conditional_edges(
+        "impact_context_builder", _route_after_impact_context, ["root_cause_synthesizer", "rule_based_decision"]
+    )
     graph.add_edge("root_cause_synthesizer", END)
+    graph.add_edge("rule_based_decision", END)
 
     return graph
 
@@ -67,12 +81,19 @@ def run_reason(
     question: str | None = None,
     org_id: str | None = None,
     persona: str | None = None,
+    gate_mode: str | None = None,
+    gate_reason: str | None = None,
+    gate_confidence: float | None = None,
 ) -> ReasonState:
     """Convenience entry point mirroring sense/subgraph.py's run_sense() --
     builds+compiles+invokes without the caller holding a compiled graph
     handle itself. Exactly one of `signal`/`question` is expected to carry
     the actual trigger; passing neither degrades gracefully to
-    `route="context_only"` rather than erroring."""
+    `route="context_only"` rather than erroring.
+
+    `gate_mode`/`gate_reason`/`gate_confidence` (plan SP-B §1e) are optional
+    -- when None (the default, and always the case for the chat/question
+    entry path), the subgraph takes its original, unmodified LLM path."""
 
     compiled = build_reason_subgraph().compile()
     initial_state: ReasonState = {"signal": signal, "question": question}
@@ -80,4 +101,10 @@ def run_reason(
         initial_state["org_id"] = org_id
     if persona is not None:
         initial_state["persona"] = persona
+    if gate_mode is not None:
+        initial_state["gate_mode"] = gate_mode
+    if gate_reason is not None:
+        initial_state["gate_reason"] = gate_reason
+    if gate_confidence is not None:
+        initial_state["gate_confidence"] = gate_confidence
     return compiled.invoke(initial_state)

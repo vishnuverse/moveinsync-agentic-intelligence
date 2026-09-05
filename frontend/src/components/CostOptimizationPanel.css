@@ -1,0 +1,88 @@
+.cost-opt-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cost-opt-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cost-opt-total {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.cost-opt-total-value {
+  font-size: var(--text-2xl, 24px);
+  font-weight: 700;
+  color: var(--color-heading);
+}
+
+.cost-opt-total-label {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.cost-opt-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.cost-opt-trend-up {
+  color: var(--color-critical);
+}
+
+.cost-opt-trend-down {
+  color: var(--color-good);
+}
+
+.cost-opt-trend-flat {
+  color: var(--color-text-muted);
+}
+
+.cost-opt-opportunities {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cost-opt-opportunity {
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.cost-opt-opportunity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.cost-opt-opportunity-vendor {
+  font-weight: 600;
+  color: var(--color-heading);
+}
+
+.cost-opt-opportunity-rec {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.cost-opt-empty {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}

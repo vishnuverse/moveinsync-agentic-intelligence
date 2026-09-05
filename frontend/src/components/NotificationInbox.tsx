@@ -110,7 +110,12 @@ export function NotificationInbox() {
       threadId: item.thread_id,
       title: item.message.length > 60 ? `${item.message.slice(0, 57)}…` : item.message,
       actions: item.status === "needs-intervention" ? "approve-reject" : "none",
-      actionTargetId: item.status === "needs-intervention" ? item.id : null,
+      // SP-B §7: generalized from "only when pending sign-off" to "always" --
+      // actionTargetId now means "the notification this trace concerns," not
+      // just "the one you can approve/reject," so the false-positive action
+      // is available on any item, not only ones awaiting sign-off.
+      actionTargetId: item.id,
+      isFalsePositive: item.is_false_positive,
     });
   }
 
@@ -144,6 +149,7 @@ export function NotificationInbox() {
               <span className={`badge ${STATUS_BADGE[item.status]}`}>
                 {STATUS_LABEL[item.status]}
               </span>
+              {item.is_false_positive && <span className="badge badge-neutral">False positive</span>}
               <span className="notification-item-time">{formatTime(item.created_at)}</span>
             </div>
             <p className="notification-item-message">{item.message}</p>

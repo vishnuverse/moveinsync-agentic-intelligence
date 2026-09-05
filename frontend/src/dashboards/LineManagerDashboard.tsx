@@ -6,18 +6,20 @@ import { ComparisonBadge } from "../charts/ChartContext";
 import { DonutChart } from "../charts/DonutChart";
 import { TrendLineChart } from "../charts/TrendLineChart";
 import "../charts/charts.css";
-import { TimeRangeSelector } from "../components/TimeRangeSelector";
+import { DateRangeSelector } from "../components/DateRangeSelector";
+import { useDateRange } from "../hooks/useDateRange";
 import { DashboardShell } from "./DashboardShell";
 
 export function LineManagerDashboard() {
-  const [days, setDays] = useState(30);
+  const { coverage, range, days, presetDays, bounds, setPresetDays, setCustomRange, ready } = useDateRange(30);
   const [noShowTrend, setNoShowTrend] = useState<ChartSeriesData | null>(null);
   const [absenceSplit, setAbsenceSplit] = useState<PieChartData | null>(null);
 
   useEffect(() => {
-    api.getNoShowTrend(days).then(setNoShowTrend);
-    api.getAbsenceSplit(days).then(setAbsenceSplit);
-  }, [days]);
+    if (!ready || !range) return;
+    api.getNoShowTrend(undefined, range).then(setNoShowTrend);
+    api.getAbsenceSplit(undefined, range).then(setAbsenceSplit);
+  }, [ready, range]);
 
   return (
     <DashboardShell
@@ -27,7 +29,15 @@ export function LineManagerDashboard() {
       charts={
         <div className="charts-grid">
           <div className="charts-grid-wide chart-range-row">
-            <TimeRangeSelector value={days} onChange={setDays} />
+            <DateRangeSelector
+              coverage={coverage}
+              range={range}
+              days={days}
+              presetDays={presetDays}
+              bounds={bounds}
+              onPresetDays={setPresetDays}
+              onCustomRange={setCustomRange}
+            />
           </div>
           <ChartPanel title="Team No-Show Rate" subtitle="Daily % of planned bookings not boarded">
             {noShowTrend && (

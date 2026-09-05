@@ -67,3 +67,85 @@ CREATE TABLE IF NOT EXISTS chat_threads (
 
 CREATE INDEX IF NOT EXISTS idx_chat_threads_org_persona ON chat_threads(org_id, persona);
 CREATE INDEX IF NOT EXISTS idx_chat_threads_updated_at ON chat_threads(updated_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- SP-B: alert_rules / gate_settings / gate_decisions -- config-driven
+-- thresholds, gate policy, and the LLM-filtering gate's audit trail (plan
+-- §1/§2/§A1). Same rationale as pipeline_runs/chat_threads above for living
+-- here: runtime-editable policy + runtime-written audit rows, not seed/input
+-- data -- must stay OUT of generate.py's reset_tables() TRUNCATE list, and
+-- must survive a reseed untouched.
+--
+-- alert_rules: one row per (org_id, signal_type). `params` is a JSONB blob
+-- keyed by the exact keyword-argument names the sense/nodes.py detector
+-- functions already accept -- the tunable set is heterogeneous per signal
+-- type (delay_breach has 1 param, attendance_correlation has 5), so a fixed-
+-- column table would need ~15 mostly-NULL columns; a JSONB blob needs no
+-- migration when a new tunable is added to one detector later. No seed data
+-- is required: app.rules.get_rules()/get_gate_settings() fall back to
+-- sense/nodes.py's hardcoded DEFAULT_* module constants when no row exists
+-- for an (org_id, signal_type) -- those constants become fallback defaults,
+-- never deleted.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id                   BIGSERIAL PRIMARY KEY,
+    org_id               TEXT NOT NULL DEFAULT 'moveinsync-demo',
+    signal_type          TEXT NOT NULL,
+    params               JSONB NOT NULL DEFAULT '{}'::jsonb,
+    gate_mode            TEXT NOT NULL DEFAULT 'auto' CHECK (gate_mode IN ('auto', 'force_suppress', 'force_rule_only', 'force_escalate')),
+    notification_cadence TEXT NOT NULL DEFAULT 'immediate' CHECK (notification_cadence IN ('immediate', 'hourly', 'every_2_hours', 'daily', 'weekly')),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by           TEXT,
+    UNIQUE (org_id, signal_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_rules_org_id ON alert_rules(org_id);
+
+-- gate_settings: one row per org -- global gate policy (not per-signal-type).
+-- escalation_after_hours_* back the §A1 escalation-hierarchy timeout check;
+-- kept on this table (not alert_rules) since, like the other columns here,
+-- they're global gate policy, not per-signal-type params.
+CREATE TABLE IF NOT EXISTS gate_settings (
+    org_id                          TEXT PRIMARY KEY DEFAULT 'moveinsync-demo',
+    recurrence_window_hours         INT NOT NULL DEFAULT 24,
+    recurrence_suppress_after       INT NOT NULL DEFAULT 3,
+    max_consecutive_suppressions    INT NOT NULL DEFAULT 5,
+    rule_only_margin_ratio          NUMERIC(5,2) NOT NULL DEFAULT 2.0,
+    max_fp_rate_for_rule_only       NUMERIC(4,3) NOT NULL DEFAULT 0.20,
+    min_confidence_for_rule_only    NUMERIC(4,3) NOT NULL DEFAULT 0.60,
+    max_healthy_suppression_rate    NUMERIC(4,3) NOT NULL DEFAULT 0.80,
+    escalation_after_hours_critical NUMERIC(5,2) NOT NULL DEFAULT 1.0,
+    escalation_after_hours_high     NUMERIC(5,2) NOT NULL DEFAULT 4.0,
+    escalation_after_hours_medium   NUMERIC(5,2) NOT NULL DEFAULT 24.0,
+    updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by                      TEXT
+);
+
+-- gate_decisions: one row per (signal, persona) evaluation, EVERY tick,
+-- regardless of the resulting action -- a `suppress` decision never produces
+-- an agent_notifications row, so this table is the only place recurrence
+-- (and the suppression-heartbeat/suppression-rate checks) can be tracked.
+-- `thread_id` is stored on every row (including suppress, computed before
+-- the gate runs) so it can JOIN to agent_notifications.thread_id for the
+-- false-positive-rate query (gate_stats.py, shared by gate.py itself and
+-- GET /api/settings/usage).
+CREATE TABLE IF NOT EXISTS gate_decisions (
+    id            BIGSERIAL PRIMARY KEY,
+    org_id        TEXT NOT NULL DEFAULT 'moveinsync-demo',
+    persona       TEXT NOT NULL CHECK (persona IN ('transport_manager', 'line_manager', 'transport_head')),
+    signal_type   TEXT NOT NULL,
+    scope         TEXT NOT NULL,
+    entity_id     TEXT,
+    severity      TEXT,
+    action        TEXT NOT NULL CHECK (action IN ('suppress', 'rule_only', 'escalate')),
+    reason        TEXT NOT NULL,
+    matched_rule  TEXT NOT NULL,
+    confidence    NUMERIC(4,3),
+    thread_id     TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_decisions_org_created ON gate_decisions(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_decisions_scope_lookup ON gate_decisions(org_id, persona, signal_type, scope, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_decisions_thread_id ON gate_decisions(thread_id);

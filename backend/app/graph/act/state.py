@@ -54,6 +54,13 @@ class ActState(TypedDict, total=False):
     # for idempotency keys; this field is an explicit override/fallback for
     # callers that invoke nodes directly without a RunnableConfig (tests).
     thread_id: str | None
+    # SP-B (plan §3): set by app.graph.supervisor.run_pipeline from the
+    # signal's configured alert_rules row. None/"immediate" -> today's
+    # existing behavior (visible right away). Read only by
+    # notification_dispatch -- interrupt_gate's rows are always
+    # safety-critical (needs_human_signoff=True implies the safety floor
+    # already forced escalate+immediate upstream), so they never need this.
+    notification_cadence: str | None
 
     # html_report_generator input
     report_items: list[ReasonDecision]

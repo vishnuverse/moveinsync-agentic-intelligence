@@ -60,6 +60,14 @@ class ReasonState(TypedDict, total=False):
     signal: Signal | None
     question: str | None
 
+    # SP-B gate plumbing (plan §1e): set by graph.py's reason_node, forwarded
+    # from TopState. `gate_mode == "rule_only"` routes past
+    # root_cause_synthesizer (no LLM call) to rule_based_decision instead --
+    # see subgraph.py's _route_after_impact_context.
+    gate_mode: str | None
+    gate_reason: str | None
+    gate_confidence: float | None
+
     route: str  # "sql" | "research" | "both" | "context_only" -- set by route_to_specialist
     research_topic: str | None
     sql_question: str | None
