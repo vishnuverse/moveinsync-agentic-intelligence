@@ -7,7 +7,8 @@ over the real MoveInSync operations dataset.
 
 | File | What it is |
 |---|---|
-| `MoveInSync_TeamSudo_Deck.html` | The 22-slide presentation deck. Self-contained — open it in any browser, no server, no assets to unpack. |
+| `MoveInSync_TeamSudo_Deck.pdf` | The 22-slide deck as a PDF, 16:9, one slide per page. Upload this if the portal wants a file. |
+| `MoveInSync_TeamSudo_Deck.html` | The same deck as a self-contained web page — open it in any browser, no server, no assets to unpack. |
 | `screenshots/` | The product screenshots used in the deck, all captured from the running stack. |
 
 ## Viewing the deck
@@ -15,8 +16,8 @@ over the real MoveInSync operations dataset.
 Open `MoveInSync_TeamSudo_Deck.html` in a browser.
 
 - **← / →**, space, or PageUp/PageDown to move between slides; Home/End jump to the ends.
-- **Print to PDF** (Cmd/Ctrl-P) exports all 22 slides at 16:9, one slide per page, for
-  portals that require a file upload.
+- `MoveInSync_TeamSudo_Deck.pdf` is the same 22 slides already exported, if you need a file
+  rather than a page. Re-export at any time with Cmd/Ctrl-P.
 
 It is also published as a live page: <https://claude.ai/code/artifact/fd469e53-9e5d-40c8-ada4-d4e8d5aa9804>
 
