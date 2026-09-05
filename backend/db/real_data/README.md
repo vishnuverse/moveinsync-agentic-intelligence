@@ -97,10 +97,13 @@ table:
 1. **Ingest-time flags** (`transform.sql`): unparseable `trip_date`/`trip_id`,
    negative `planned_km`/`traveled_km` (clipped to NULL), the stray `"False"`
    literal in `alerts_data.severity` (cleaned to NULL), `bill_data` rows with
-   `total_trip_km <= 0.1` (cost-per-km left NULL rather than computing `inf`
-   or a multi-million-INR/km outlier), orphaned cross-file `trip_id`
-   references (a `bill_data`/`alerts_data`/`emp_data`/`trip_feedback` row
-   whose `trip_id` has no matching `ride_data_trip` row), and **an
+   `total_trip_km <= 0.1` **and no usable fallback distance** (cost-per-km
+   left NULL rather than computing `inf` or a multi-million-INR/km outlier --
+   see below), `bill_data` rows with a valid `total_trip_km` but a `$0
+   trip_cost` (cost-per-km left NULL for the same reason), orphaned
+   cross-file `trip_id` references (a `bill_data`/`alerts_data`/`emp_data`/
+   `trip_feedback` row whose `trip_id` has no matching `ride_data_trip` row),
+   and **an
    undocumented quirk found during ingestion, not one of the Dictionary's
    9**: `trip_id` is not quite globally unique across the three monthly
    files -- ~6,754 values (~1.1% of trips) collide across two different
@@ -114,7 +117,21 @@ table:
    not a per-trip fare); left in, these corrupted vendor cost-per-km
    averages by orders of magnitude (a -448,973 INR/km "rate" was observed on
    a real vendor before this guard was added), so they're flagged and
-   excluded from `mis.cost` entirely rather than clipped.
+   excluded from `mis.cost` entirely rather than clipped. A third: `vanta-Aus`
+   and (mostly) `vanta-Sea`'s vendors bill almost entirely by distance
+   *slab* rather than a metered per-trip figure -- `total_trip_km` is a
+   literal `0` for ~97-99.97% of these two orgs' `bill_data` rows
+   (`slab_name` holds a bucket like `"Medium"`/`"Long"` instead), versus 99%+
+   populated for the other three orgs. Left as a pure billing-distance guard
+   this starved `mis.cost.cost_per_km_inr` (and, via the vendor-average
+   backfill, `mis.vendor.cost_per_km_inr` for both of vanta-Aus's vendors)
+   almost entirely, so `cost_per_km_inr` now falls back to the same
+   `trip_id`'s real `mis.trip.traveled_km`/`planned_km` (sourced from the
+   unrelated `ride_data_trip` file) when billing distance is unusable,
+   recovering cost-per-km for ~99% of the previously-blank rows.
+   `distance_km` itself is untouched by this fallback and still reflects the
+   raw billed figure verbatim, since `chart_data.billing_discrepancy`
+   deliberately compares it against `traveled_km`.
 2. **Live sense-layer flags** (`backend/app/graph/sense/nodes.py`'s
    `flag_data_quality`, unmodified): null `actual_time` on completed trips,
    malformed timestamps, duplicate trips, out-of-range `passenger_count`,

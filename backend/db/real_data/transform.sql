@@ -497,11 +497,29 @@ SELECT
     stg.safe_ts_mdy_hm(cycle_start) AS cycle_start_ts
 FROM stg.bill_data;
 
+-- Org-specific quirk found during ingestion: for vanta-Aus and (mostly)
+-- vanta-Sea, bill_data.total_trip_km is a literal 0 for the overwhelming
+-- majority of rows (slab_name is a distance *bucket* like "Medium"/"Long"
+-- rather than a metered figure for these two orgs' vendors -- catalyst-Sac/
+-- orbit-Slc/pinnacle-Slc all carry a real decimal total_trip_km on ~99%+ of
+-- rows instead). Left as a pure billing-distance divide-by-zero guard, this
+-- made cost_per_km_inr NULL for ~97-99.97% of these two orgs' cost rows (and,
+-- via the vendor backfill below, silently starved vanta-Aus's two vendors of
+-- any cost_per_km_inr at all). But the same trip_id's real telemetry distance
+-- (mis.trip.traveled_km / planned_km, sourced from ride_data_trip -- a
+-- completely different raw file than bill_data) IS available for ~99% of
+-- these otherwise-unusable rows, so it's used as a fallback for the
+-- cost_per_km_inr calculation only -- NOT for distance_km itself, which stays
+-- the raw billed total_trip_km verbatim (see mis_schema.sql comment: chart_data
+-- .billing_discrepancy deliberately diffs distance_km against traveled_km, so
+-- distance_km must keep meaning "what was billed", not "what was driven").
 INSERT INTO data_quality_flags (org_id, source_table, source_pk, issue_type, issue_detail, severity)
-SELECT business_unit, 'bill_data', COALESCE(tid::text, '(unparsed)'), 'out_of_range_value',
-       'total_trip_km <= 0.1 (' || distance_km || '), cost_per_km not meaningfully computable', 'low'
-FROM bill_clean
-WHERE distance_km IS NULL OR distance_km <= 0.1;
+SELECT b.business_unit, 'bill_data', COALESCE(b.tid::text, '(unparsed)'), 'out_of_range_value',
+       'total_trip_km <= 0.1 (' || b.distance_km || ') and no usable trip.traveled_km/planned_km fallback either, cost_per_km not meaningfully computable', 'low'
+FROM bill_clean b
+LEFT JOIN mis.trip t ON t.id = b.tid
+WHERE (b.distance_km IS NULL OR b.distance_km <= 0.1)
+  AND COALESCE(t.traveled_km, t.planned_km, 0) <= 0.1;
 
 INSERT INTO data_quality_flags (org_id, source_table, source_pk, issue_type, issue_detail, severity)
 SELECT b.business_unit, 'bill_data', COALESCE(b.tid::text, '(unparsed)'), 'orphaned_reference',
@@ -525,12 +543,31 @@ SELECT business_unit, 'bill_data', COALESCE(tid::text, '(OverHead/adjustment lin
 FROM bill_clean
 WHERE amount < 0;
 
+-- A handful of rows in every org (worst: 585 in vanta-Sea) carry a real,
+-- valid total_trip_km but a $0 trip_cost -- the inverse of the "$0 km" quirk
+-- above. Not a billing correction (positive-or-zero, no "OverHead" marker),
+-- so the row itself is kept, but a $0 fare with real distance driven is not a
+-- meaningful rate either -- guarded the same way as the divide-by-zero case
+-- rather than letting it silently zero out the vendor average.
+INSERT INTO data_quality_flags (org_id, source_table, source_pk, issue_type, issue_detail, severity)
+SELECT business_unit, 'bill_data', COALESCE(tid::text, '(unparsed)'), 'out_of_range_value',
+       'trip_cost is 0 while total_trip_km (' || distance_km || ') is valid, cost_per_km not meaningfully computable', 'low'
+FROM bill_clean
+WHERE amount = 0 AND distance_km IS NOT NULL AND distance_km > 0.1;
+
 INSERT INTO mis.cost (org_id, route_id, vendor_id, trip_id, cost_date, distance_km, passenger_count, total_cost_inr, cost_per_km_inr, cost_category, contract, slab_name)
 SELECT
     b.business_unit, t.route_id, v.id, b.tid,
     COALESCE(t.trip_date, b.cycle_start_ts::date, CURRENT_DATE),
     b.distance_km, t.passenger_count, b.amount,
-    CASE WHEN b.distance_km IS NOT NULL AND b.distance_km > 0.1 THEN round(b.amount / b.distance_km, 4) ELSE NULL END,
+    CASE
+        WHEN b.amount > 0 AND b.distance_km IS NOT NULL AND b.distance_km > 0.1
+            THEN round(b.amount / b.distance_km, 4)
+        WHEN b.amount > 0 AND (b.distance_km IS NULL OR b.distance_km <= 0.1)
+             AND COALESCE(t.traveled_km, t.planned_km) > 0.1
+            THEN round(b.amount / COALESCE(t.traveled_km, t.planned_km), 4)
+        ELSE NULL
+    END,
     'trip_fare', b.contract, NULLIF(b.slab_name, '')
 FROM bill_clean b
 LEFT JOIN mis.trip t ON t.id = b.tid
