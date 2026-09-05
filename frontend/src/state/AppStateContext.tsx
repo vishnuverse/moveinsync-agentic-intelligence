@@ -27,6 +27,9 @@ export interface TraceDrawerState {
   title: string | null;
   actions: "none" | "approve-reject";
   actionTargetId: string | null;
+  /** SP-B §7: already marked false positive -- TraceDrawer hides the
+   * "Mark as false positive" action when true. */
+  isFalsePositive: boolean;
 }
 
 export interface PersonaUiState {
@@ -40,6 +43,7 @@ const emptyTrace: TraceDrawerState = {
   title: null,
   actions: "none",
   actionTargetId: null,
+  isFalsePositive: false,
 };
 
 function emptyPersonaState(): PersonaUiState {
@@ -59,6 +63,7 @@ interface AppStateValue {
     title?: string;
     actions?: "none" | "approve-reject";
     actionTargetId?: string | null;
+    isFalsePositive?: boolean;
   }) => void;
   closeTrace: () => void;
   notifyResolved: (id: string, status: NotificationStatus) => void;
@@ -106,6 +111,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           title: opts.title ?? null,
           actions: opts.actions ?? "none",
           actionTargetId: opts.actionTargetId ?? null,
+          isFalsePositive: opts.isFalsePositive ?? false,
         },
       }));
     },

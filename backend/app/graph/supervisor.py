@@ -52,11 +52,16 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import text
+
 from app.checkpointer import get_checkpointer
+from app.contracts import get_contract
 from app.graph.act import build_act_subgraph
 from app.graph.act.db import get_engine as get_act_engine
-from app.graph.act.db import notification_exists_for_thread
+from app.graph.act.db import log_gate_decision, notification_exists_for_thread
+from app.graph.reason.gate import ALWAYS_ESCALATE_SEVERITIES, ALWAYS_ESCALATE_SIGNAL_TYPES, evaluate_gate
 from app.graph.sense import Signal, run_sense
+from app.rules import get_gate_settings, get_rules
 from app.services.notifications_query import list_notifications
 
 from .graph import build_top_graph
@@ -93,10 +98,31 @@ logger = logging.getLogger(__name__)
 #   TH2 (carbon footprint vs. sustainability goal)           -> transport_head
 #   PRD v3 F1 (escort compliance / active panic alert)       -> transport_manager
 #   PRD v3 F2 (billing slab/distance discrepancy)            -> transport_head
+#   performance_variability (plan SP-B §B2, new): consistency/std-dev anomaly
+#       across delay, distance, and cost sub-metrics -- all operational-
+#       reliability concerns a transport manager would take to the vendor.
+#       Deliberately not also routed to transport_head the way
+#       cost_divergence is, to avoid duplicate notification/LLM volume for a
+#       single-persona rollout; revisit if Transport Head asks for it.
 #   data_quality_issue is logged (backend/db's data_quality_flags, written by
 #       the sense layer itself) but is not persona-actionable on its own --
 #       no reason/act dispatch for it here.
 # ---------------------------------------------------------------------------
+# SP-B escalation hierarchy (plan §A1): a real reporting hierarchy --
+# Transport & Facilities Head (strategic, most senior) -> Transport Manager
+# (operational, reports to the Head) -> Team/Line Manager (shift-level, most
+# localized) -- confirmed against the persona roles' own stated LEVEL 1/2/3
+# framing (Team/Floor Manager -> Transport Manager -> Head of Transport &
+# Facilities). An `open` notification nobody acknowledges within its
+# severity's timeout (gate_settings.escalation_after_hours_*) is promoted to
+# the next persona up this chain -- see check_escalations below. The Head has
+# no `None` -- nothing above them to escalate to.
+ESCALATION_CHAIN: dict[str, str | None] = {
+    "line_manager": "transport_manager",
+    "transport_manager": "transport_head",
+    "transport_head": None,
+}
+
 _PERSONA_ROUTES: dict[str, tuple[str, ...]] = {
     "delay_breach": ("transport_manager",),
     "incident": ("transport_manager",),
@@ -106,6 +132,7 @@ _PERSONA_ROUTES: dict[str, tuple[str, ...]] = {
     "attendance_unrelated_late": ("line_manager",),
     "escort_compliance_violation": ("transport_manager",),
     "billing_discrepancy": ("transport_head",),
+    "performance_variability": ("transport_manager",),
     "data_quality_issue": (),
 }
 
@@ -139,6 +166,109 @@ def _question_ref(question: str) -> str:
     return hashlib.sha1(question.strip().lower().encode("utf-8")).hexdigest()[:10]
 
 
+# agent_notifications.severity is info/warning/critical (not Signal's own
+# low/medium/high/critical) -- 'info' is deliberately excluded from
+# escalation entirely (nothing to promote urgently), 'warning' uses the
+# "high" timeout bucket as the closest match.
+_ESCALATION_TIMEOUT_ATTR_BY_SEVERITY: dict[str, str] = {
+    "critical": "escalation_after_hours_critical",
+    "warning": "escalation_after_hours_high",
+}
+
+
+def check_escalations(engine: Any, org_id: str, gate_settings: Any) -> list[dict[str, Any]]:
+    """SP-B escalation hierarchy (plan §A1): folded into the same scheduler
+    tick as the main signal loop (called at the end of run_pipeline) rather
+    than a separate scheduler process -- this is a small, additive check
+    (one SELECT + up to a few INSERT/UPDATE pairs per tick), not a new
+    subsystem. Promotes an `open`, not-yet-escalated notification to the
+    next persona in ESCALATION_CHAIN once it's sat unacknowledged past its
+    severity's configured timeout -- a false-negative safeguard (plan
+    Context): the system correctly detected a problem, but nothing forced it
+    in front of a more senior owner if the first-line persona missed it.
+
+    Escalated notifications are always `notification_cadence="immediate"`
+    (escalation exists specifically to interrupt a senior owner right now --
+    a batched escalation defeats the purpose) and inherit the original's
+    severity. Returns a summary list, one entry per escalation performed,
+    for the caller's own tick-summary/activity-log purposes.
+    """
+    from app.rules import compute_scheduled_for
+
+    contract = get_contract().entity("notification")
+    table, c = contract.table, contract.column
+    escalations: list[dict[str, Any]] = []
+
+    with engine.begin() as conn:
+        for severity, timeout_attr in _ESCALATION_TIMEOUT_ATTR_BY_SEVERITY.items():
+            timeout_hours = getattr(gate_settings, timeout_attr)
+            rows = conn.execute(
+                text(
+                    f"SELECT {c('id')} AS id, {c('persona')} AS persona, {c('scope')} AS scope, "
+                    f"{c('title')} AS title, {c('message')} AS message, {c('thread_id')} AS thread_id "
+                    f"FROM {table} "
+                    f"WHERE {c('org_id')} = :org_id AND {c('status')} = 'open' "
+                    f"AND {c('severity')} = :severity AND {c('escalated_at')} IS NULL "
+                    f"AND {c('created_at')} < now() - (:timeout_hours || ' hours')::interval"
+                ),
+                {"org_id": org_id, "severity": severity, "timeout_hours": timeout_hours},
+            ).mappings().all()
+
+            for row in rows:
+                next_persona = ESCALATION_CHAIN.get(row["persona"])
+                if not next_persona:
+                    continue  # already at the top of the chain (transport_head)
+
+                # Idempotency: guarded by the WHERE clause above
+                # (`escalated_at IS NULL`), not a DB constraint -- the
+                # original row is stamped with escalated_at immediately
+                # after this INSERT, in the same transaction, so a re-run of
+                # this function can never select the same original row twice.
+                escalated_thread_id = f"{next_persona}:{row['scope']}:escalated-{row['id']}"
+                conn.execute(
+                    text(
+                        f"INSERT INTO {table} ({c('org_id')}, {c('persona')}, {c('scope')}, "
+                        f"{c('severity')}, {c('title')}, {c('message')}, {c('status')}, "
+                        f"{c('thread_id')}, {c('scheduled_for')}, {c('related_entity_type')}) "
+                        f"VALUES (:org_id, :persona, :scope, :severity, :title, :message, 'open', "
+                        f":thread_id, NULL, 'escalation')"
+                    ),
+                    {
+                        "org_id": org_id,
+                        "persona": next_persona,
+                        "scope": row["scope"],
+                        "severity": severity,
+                        "title": f"[Escalated] {row['title']}",
+                        "message": (
+                            f"{row['message']} -- escalated to {next_persona} after "
+                            f"{timeout_hours:.0f}h unacknowledged by {row['persona']}."
+                        ),
+                        "thread_id": escalated_thread_id,
+                    },
+                )
+                conn.execute(
+                    text(
+                        f"UPDATE {table} SET {c('escalated_at')} = now(), "
+                        f"{c('escalated_to_persona')} = :next_persona WHERE {c('id')} = :id"
+                    ),
+                    {"next_persona": next_persona, "id": row["id"]},
+                )
+                escalations.append(
+                    {
+                        "original_notification_id": row["id"],
+                        "from_persona": row["persona"],
+                        "to_persona": next_persona,
+                        "severity": severity,
+                        "escalation_reason": "timeout",
+                        "thread_id": escalated_thread_id,
+                    }
+                )
+
+    if escalations:
+        logger.info("check_escalations: org=%s escalated %d notification(s)", org_id, len(escalations))
+    return escalations
+
+
 def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The top-level autonomy entry point (plan §4/§12 step 9): one sense pass,
     then reason->act once per (signal, persona). Called by both scheduler
@@ -153,6 +283,11 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
     # inside the per-signal loop below (up to hundreds of iterations against
     # real data), to avoid spinning up hundreds of throwaway pools per tick.
     act_engine = get_act_engine()
+    # SP-B (plan §1/§2): resolved once per tick, not per signal -- both are
+    # cached with a short TTL (app.rules.loader) so a Settings-page change
+    # still takes effect within one tick without re-querying per signal.
+    rules_by_signal_type = get_rules(act_engine, org_id)
+    gate_settings = get_gate_settings(act_engine, org_id)
 
     sense_result = run_sense(org_id=org_id, since=since, event=event)
     signals: list[Signal] = sense_result.get("signals", [])
@@ -196,6 +331,50 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
                 )
                 continue
 
+            # SP-B gate (plan §1): decides suppress/rule_only/escalate BEFORE
+            # the graph (and its guaranteed-until-now LLM call) ever runs.
+            # Logged for every evaluation regardless of the action taken --
+            # see log_gate_decision's own docstring for why a `suppress`
+            # still needs a row (it never produces an agent_notifications
+            # one, so this is the only audit trail for recurrence tracking).
+            gate_decision = evaluate_gate(
+                signal,
+                persona=persona,
+                scope=scope,
+                engine=act_engine,
+                org_id=org_id,
+                rules=rules_by_signal_type.get(signal.signal_type),
+                gate_settings=gate_settings,
+            )
+            log_gate_decision(
+                act_engine,
+                org_id=org_id,
+                persona=persona,
+                signal_type=signal.signal_type,
+                scope=scope,
+                entity_id=signal.entity_id,
+                severity=signal.severity,
+                thread_id=thread_id,
+                action=gate_decision.action,
+                reason=gate_decision.reason,
+                matched_rule=gate_decision.matched_rule,
+                confidence=gate_decision.confidence,
+            )
+
+            if gate_decision.action == "suppress":
+                summary.append(
+                    {
+                        "signal_type": signal.signal_type,
+                        "entity_type": signal.entity_type,
+                        "entity_id": signal.entity_id,
+                        "persona": persona,
+                        "thread_id": thread_id,
+                        "action": "suppressed_by_gate",
+                        "gate_reason": gate_decision.reason,
+                    }
+                )
+                continue
+
             initial_state: TopState = {
                 "org_id": org_id,
                 "persona": persona,
@@ -203,6 +382,25 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
                 "scope": scope,
                 "thread_id": thread_id,
             }
+            # SP-B cadence (plan §3/§A1): the safety floor (mirrored from
+            # gate.py's own -- incident/escort_compliance_violation/critical
+            # always escalate) also pins cadence to "immediate" regardless of
+            # any alert_rules override, for the same reason: a safety-
+            # critical alert must never be silently held for a batch.
+            if signal.signal_type in ALWAYS_ESCALATE_SIGNAL_TYPES or signal.severity in ALWAYS_ESCALATE_SEVERITIES:
+                initial_state["notification_cadence"] = "immediate"
+            else:
+                signal_rules = rules_by_signal_type.get(signal.signal_type)
+                initial_state["notification_cadence"] = signal_rules.notification_cadence if signal_rules else "immediate"
+
+            if gate_decision.action == "rule_only":
+                initial_state["gate_mode"] = "rule_only"
+                initial_state["gate_reason"] = gate_decision.reason
+                initial_state["gate_confidence"] = gate_decision.confidence
+            # gate_decision.action == "escalate" leaves gate_mode unset
+            # entirely -- zero behavior change, byte-for-byte the same as
+            # the pipeline's original (pre-SP-B) path.
+
             config = {"configurable": {"thread_id": thread_id}}
             try:
                 result = top_graph.invoke(initial_state, config=config)
@@ -237,6 +435,16 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
                     "dispatch_status": result.get("dispatch_status"),
                 }
             )
+
+    # SP-B escalation hierarchy (plan §A1): folded into the same tick, after
+    # the main signal loop -- checks for anything unacknowledged past its
+    # severity's timeout, independent of whatever signals this particular
+    # tick did or didn't detect.
+    try:
+        escalations = check_escalations(act_engine, org_id, gate_settings)
+        summary.extend({**e, "action": "escalated"} for e in escalations)
+    except Exception:  # noqa: BLE001 - one bad escalation check must not fail the whole tick
+        logger.exception("run_pipeline: check_escalations failed for org %s", org_id)
 
     return summary
 

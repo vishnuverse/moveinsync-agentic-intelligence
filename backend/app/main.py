@@ -13,7 +13,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import activity, charts, chat, dashboard, demo, meta, notifications, reports, roles, sse, trace, ws
+from app.api import activity, charts, chat, dashboard, demo, insights, meta, notifications, reports, roles, settings, sse, trace, ws
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -44,6 +44,8 @@ app.include_router(demo.router, prefix="/api")
 app.include_router(meta.router, prefix="/api")
 app.include_router(ws.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
+app.include_router(insights.router, prefix="/api")
 
 
 @app.get("/health")

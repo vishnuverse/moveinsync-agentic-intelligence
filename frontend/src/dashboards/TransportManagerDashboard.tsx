@@ -6,18 +6,20 @@ import { ChartPanel } from "../charts/ChartPanel";
 import { ComparisonBadge } from "../charts/ChartContext";
 import { TrendLineChart } from "../charts/TrendLineChart";
 import "../charts/charts.css";
-import { TimeRangeSelector } from "../components/TimeRangeSelector";
+import { DateRangeSelector } from "../components/DateRangeSelector";
+import { useDateRange } from "../hooks/useDateRange";
 import { DashboardShell } from "./DashboardShell";
 
 export function TransportManagerDashboard() {
-  const [days, setDays] = useState(30);
+  const { coverage, range, days, presetDays, bounds, setPresetDays, setCustomRange, ready } = useDateRange(30);
   const [otaTrend, setOtaTrend] = useState<ChartSeriesData | null>(null);
   const [delayReasons, setDelayReasons] = useState<ChartSeriesData | null>(null);
 
   useEffect(() => {
-    api.getOtaTrend(days).then(setOtaTrend);
-    api.getDelayReasons(days).then(setDelayReasons);
-  }, [days]);
+    if (!ready || !range) return;
+    api.getOtaTrend(undefined, range).then(setOtaTrend);
+    api.getDelayReasons(undefined, range).then(setDelayReasons);
+  }, [ready, range]);
 
   return (
     <DashboardShell
@@ -27,7 +29,15 @@ export function TransportManagerDashboard() {
       charts={
         <div className="charts-grid">
           <div className="charts-grid-wide chart-range-row">
-            <TimeRangeSelector value={days} onChange={setDays} />
+            <DateRangeSelector
+              coverage={coverage}
+              range={range}
+              days={days}
+              presetDays={presetDays}
+              bounds={bounds}
+              onPresetDays={setPresetDays}
+              onCustomRange={setCustomRange}
+            />
           </div>
           <ChartPanel title="On-Time Arrival Rate" subtitle="Daily OTA %, breach threshold 15 min">
             {otaTrend && (

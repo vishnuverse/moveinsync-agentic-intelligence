@@ -57,6 +57,14 @@ entities:
       # touch that code path at all.
       delay_reason: delay_reason
       delay_minutes: delay_minutes
+      # Additive (SP-B §B2 detect_variability_signal): real physical column
+      # already on mis.trip, just never mapped before -- needed to compute
+      # the route's planned-vs-traveled distance variance.
+      planned_km: planned_km
+      # Additive (SP-B §9b aggregated_insights.py flagged_drivers): real
+      # physical columns already on mis.trip, just never mapped before.
+      is_driver_nc: is_driver_nc
+      is_cab_nc: is_cab_nc
 
   cost:
     table: mis.cost
@@ -250,6 +258,14 @@ entities:
       thread_id: thread_id
       created_at: created_at
       updated_at: updated_at
+      # SP-B additions (db/migrations/003/004/005; also on schema.sql's fresh-
+      # db definition of agent_notifications directly).
+      is_false_positive: is_false_positive
+      false_positive_note: false_positive_note
+      false_positive_marked_at: false_positive_marked_at
+      scheduled_for: scheduled_for
+      escalated_at: escalated_at
+      escalated_to_persona: escalated_to_persona
 
   report:
     table: agent_reports
@@ -327,3 +343,55 @@ entities:
       scope_entity_id: scope_entity_id
       created_at: created_at
       updated_at: updated_at
+
+  # SP-B additions (backend/db/api_schema.sql) -- gate/rules infra, same
+  # `public` scoping as pipeline_run/chat_thread above (runtime-editable
+  # policy + runtime-written audit rows, not business data).
+  gate_decision:
+    table: gate_decisions
+    description: audit trail of every suppress/rule-only/escalate decision the LLM-filtering gate made, one row per (signal, persona) evaluation
+    columns:
+      id: id
+      org_id: org_id
+      persona: persona
+      signal_type: signal_type
+      scope: scope
+      entity_id: entity_id
+      severity: severity
+      action: action
+      reason: reason
+      matched_rule: matched_rule
+      confidence: confidence
+      thread_id: thread_id
+      created_at: created_at
+
+  alert_rule:
+    table: alert_rules
+    description: per-org, per-signal-type configurable detector thresholds, gate mode, and notification cadence (Settings page)
+    columns:
+      id: id
+      org_id: org_id
+      signal_type: signal_type
+      params: params
+      gate_mode: gate_mode
+      notification_cadence: notification_cadence
+      updated_at: updated_at
+      updated_by: updated_by
+
+  gate_setting:
+    table: gate_settings
+    description: per-org global gate policy -- recurrence/suppression-heartbeat/rule-only-eligibility knobs and escalation-hierarchy timeouts
+    columns:
+      org_id: org_id
+      recurrence_window_hours: recurrence_window_hours
+      recurrence_suppress_after: recurrence_suppress_after
+      max_consecutive_suppressions: max_consecutive_suppressions
+      rule_only_margin_ratio: rule_only_margin_ratio
+      max_fp_rate_for_rule_only: max_fp_rate_for_rule_only
+      min_confidence_for_rule_only: min_confidence_for_rule_only
+      max_healthy_suppression_rate: max_healthy_suppression_rate
+      escalation_after_hours_critical: escalation_after_hours_critical
+      escalation_after_hours_high: escalation_after_hours_high
+      escalation_after_hours_medium: escalation_after_hours_medium
+      updated_at: updated_at
+      updated_by: updated_by

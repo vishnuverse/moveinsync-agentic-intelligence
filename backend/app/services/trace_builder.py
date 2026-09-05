@@ -28,7 +28,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import text
+
 from app.api.deps import get_top_graph
+from app.contracts import get_contract
+from app.graph.act.db import get_engine
 
 
 def _ts(snapshot: Any) -> str:
@@ -91,6 +95,12 @@ def _context_detail(impact_context: dict[str, Any]) -> str:
 
 
 def _decision_detail(decision: dict[str, Any]) -> str:
+    # NOTE (plan SP-B §9a): `recommendation` used to only ever appear folded
+    # into this joined string -- easy to miss inside a paragraph. It's kept
+    # here too (so the collapsed detail text still reads completely on its
+    # own), but build_trace's `decision` step ALSO carries it as its own
+    # `recommendation` key now, so the frontend can render it as a visually
+    # distinct "Recommended Action" block instead of re-parsing this string.
     parts: list[str] = []
     if decision.get("summary"):
         parts.append(decision["summary"])
@@ -106,6 +116,32 @@ def _decision_detail(decision: dict[str, Any]) -> str:
     return " ".join(parts) or "Decision recorded."
 
 
+def _gate_decision_row(thread_id: str) -> dict[str, Any] | None:
+    """Plan SP-B §8: gate_decisions rows are written directly by
+    supervisor.run_pipeline BEFORE the graph even runs, so they live outside
+    the LangGraph checkpoint history build_trace otherwise reads entirely
+    from -- this is the one place trace_builder.py reaches past the
+    checkpointer for real. Returns the single most recent decision for this
+    thread_id (there is normally exactly one -- a thread_id is per-signal),
+    or None if the gate was never consulted (e.g. a chat-question thread,
+    which never goes through supervisor.run_pipeline's gate at all)."""
+    contract = get_contract().entity("gate_decision")
+    table, c = contract.table, contract.column
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                f"SELECT {c('action')} AS action, {c('reason')} AS reason, "
+                f"{c('matched_rule')} AS matched_rule, {c('confidence')} AS confidence, "
+                f"{c('created_at')} AS created_at "
+                f"FROM {table} WHERE {c('thread_id')} = :thread_id "
+                f"ORDER BY {c('created_at')} DESC LIMIT 1"
+            ),
+            {"thread_id": thread_id},
+        ).mappings().first()
+    return dict(row) if row is not None else None
+
+
 def build_trace(thread_id: str) -> list[dict[str, Any]]:
     top_graph = get_top_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -119,7 +155,8 @@ def build_trace(thread_id: str) -> list[dict[str, Any]]:
         top_snapshots = snapshots
 
     steps: list[dict[str, Any]] = []
-    have_signal = have_sql = have_context = have_decision = False
+    have_signal = have_gate = have_sql = have_context = have_decision = False
+    gate_row = _gate_decision_row(thread_id)
 
     for snap in top_snapshots:
         values = snap.values or {}
@@ -129,15 +166,44 @@ def build_trace(thread_id: str) -> list[dict[str, Any]]:
             signal = values.get("signal")
             question = values.get("question")
             if signal or question or values.get("thread_id"):
-                steps.append(
-                    {
-                        "step": "signal_detected",
-                        "label": "Signal Detected",
-                        "detail": _signal_detail(signal, question),
-                        "timestamp": timestamp,
-                    }
-                )
+                detector_sql = (signal or {}).get("raw_metric", {}).get("detector_sql") if signal else None
+                step: dict[str, Any] = {
+                    "step": "signal_detected",
+                    "label": "Signal Detected",
+                    "detail": _signal_detail(signal, question),
+                    "timestamp": timestamp,
+                }
+                if detector_sql:
+                    # plan SP-B §8: the detector's OWN hardcoded SQL that
+                    # actually found this signal -- distinct from (and, for a
+                    # rule_only decision, the ONLY SQL in) the trace, since
+                    # sql_generated/sql_executed below only ever show the SQL
+                    # *agent's* dynamically-generated query, which never runs
+                    # at all on the rule_only path (see route_to_specialist).
+                    step["sql"] = detector_sql
+                steps.append(step)
                 have_signal = True
+
+                # plan SP-B §8: inserted immediately after signal_detected,
+                # sourced from gate_decisions (not the checkpoint state --
+                # see _gate_decision_row's docstring). Absent entirely for a
+                # chat-question thread, which never goes through the gate.
+                if not have_gate and gate_row is not None:
+                    action_label = gate_row["action"].replace("_", " ").title()
+                    confidence = gate_row.get("confidence")
+                    confidence_clause = f", confidence: {float(confidence):.0%}" if confidence is not None else ""
+                    steps.append(
+                        {
+                            "step": "gate_decision",
+                            "label": "Gate Evaluated",
+                            "detail": (
+                                f"{action_label} -- {gate_row['reason']} "
+                                f"(rule: {gate_row['matched_rule']}{confidence_clause})"
+                            ),
+                            "timestamp": gate_row["created_at"].isoformat(),
+                        }
+                    )
+                    have_gate = True
 
         sql_result = values.get("sql_result") or {}
         if not have_sql and sql_result:
@@ -179,14 +245,18 @@ def build_trace(thread_id: str) -> list[dict[str, Any]]:
 
         decision = values.get("decision") or {}
         if not have_decision and decision:
-            steps.append(
-                {
-                    "step": "decision",
-                    "label": "Decision",
-                    "detail": _decision_detail(decision),
-                    "timestamp": timestamp,
-                }
-            )
+            decision_step: dict[str, Any] = {
+                "step": "decision",
+                "label": "Decision",
+                "detail": _decision_detail(decision),
+                "timestamp": timestamp,
+            }
+            # plan SP-B §9a: a distinct field, not just folded into `detail`,
+            # so the frontend can render a visually separate "Recommended
+            # Action" block instead of re-parsing the joined string.
+            if decision.get("recommendation"):
+                decision_step["recommendation"] = decision["recommendation"]
+            steps.append(decision_step)
             have_decision = True
 
     return steps

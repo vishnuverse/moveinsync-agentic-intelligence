@@ -102,6 +102,48 @@ def _narrative_section(narrative: dict[str, str]) -> str:
       </section>"""
 
 
+def _recommended_actions_section(items: list[dict[str, Any]]) -> str:
+    """Plan SP-B §9a: a distinct, scannable "Recommended Actions" block --
+    deliberately a PURE function of `items`, not the LLM-authored narrative,
+    so it is structurally guaranteed non-empty even when the LLM narrative
+    call fails and generator.py falls back to the static narrative (there is
+    no LLM failure mode for this section at all, since it never calls one).
+    One bullet per item that has a recommendation, prioritizing items that
+    needed sign-off, deduplicated, capped at 5 so the section stays a
+    TL;DR, not a repeat of the full findings table below it."""
+    seen: set[str] = set()
+    bullets: list[str] = []
+    ranked = sorted(items, key=lambda it: not it.get("needs_human_signoff"))
+    for item in ranked:
+        recommendation = item.get("recommendation")
+        if not recommendation or recommendation in seen:
+            continue
+        seen.add(recommendation)
+        bullets.append(html.escape(recommendation))
+        if len(bullets) >= 5:
+            break
+
+    if not bullets:
+        body = (
+            f'<p style="color:{BODY_TEXT};font-size:14px;line-height:1.6;">'
+            "No items this period carried a specific recommendation.</p>"
+        )
+    else:
+        items_html = "".join(
+            f'<li style="margin:6px 0;color:{BODY_TEXT};font-size:14px;line-height:1.5;">{b}</li>'
+            for b in bullets
+        )
+        body = f'<ul style="margin:8px 0 0;padding-left:20px;">{items_html}</ul>'
+
+    return f"""
+      <section style="margin:32px 0;">
+        <h2 style="color:{OUTER_SPACE};font-size:18px;border-bottom:2px solid {APPLE_GREEN};padding-bottom:6px;">
+          Recommended Actions
+        </h2>
+        {body}
+      </section>"""
+
+
 def _confidence_cell(confidence: Any) -> str:
     if not isinstance(confidence, (int, float)):
         return "&mdash;"
@@ -209,6 +251,7 @@ def render_report_html(
     <main style="padding:8px 32px 32px;">
       {_kpi_cards_html(metrics)}
       {_narrative_section(narrative)}
+      {_recommended_actions_section(items)}
 
       <section style="margin:32px 0;">
         <h2 style="color:{OUTER_SPACE};font-size:18px;border-bottom:2px solid {APPLE_GREEN};padding-bottom:6px;">

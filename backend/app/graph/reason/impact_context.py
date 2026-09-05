@@ -38,8 +38,15 @@ _SIGNAL_METRIC_SPEC: dict[str, tuple[str, str, str]] = {
     "delay_breach": ("avg_delay_minutes", "min", "avg delay"),
     "cost_divergence": ("observed_cost_per_km", "INR/km", "observed cost/km"),
     "emissions_over_target": ("avg_co2_per_passenger_km", "gCO2/pax-km", "avg emissions"),
+    # Correlated case: the ratio IS the insight ("83% of lates are the shuttle's
+    # fault -> don't penalise the employee"), so keep it as the headline.
     "attendance_correlated_with_transport": ("correlation_ratio", "ratio", "transport-correlation ratio"),
-    "attendance_unrelated_late": ("correlation_ratio", "ratio", "transport-correlation ratio"),
+    # Unrelated case: the ratio is ~0 by definition, so headlining it just
+    # printed "0%" on every card. The actionable number for a line manager here
+    # is HOW MANY late arrivals the employee racked up that transport does NOT
+    # explain -- so headline the late count instead (the "0 of N transport-
+    # caused" split still lands in the business-impact sentence + root cause).
+    "attendance_unrelated_late": ("late_count", "", "late arrivals (not transport-caused)"),
 }
 
 

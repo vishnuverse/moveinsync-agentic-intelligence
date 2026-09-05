@@ -150,6 +150,9 @@ def reason_node(state: TopState) -> dict:
         question=state.get("question"),
         org_id=state.get("org_id"),
         persona=state.get("persona"),
+        gate_mode=state.get("gate_mode"),
+        gate_reason=state.get("gate_reason"),
+        gate_confidence=state.get("gate_confidence"),
     )
     # BUGFIX (found while wiring the /threads/{id}/trace and /dashboard API
     # endpoints against this graph's checkpointed state): ReasonState's actual

@@ -29,6 +29,13 @@ export interface NotificationItem {
   status: NotificationStatus;
   thread_id: string;
   created_at: string;
+  /** Defaults to false server-side (Pydantic default); optional here so
+   * every pre-existing mock fixture doesn't need updating individually. */
+  is_false_positive?: boolean;
+}
+
+export interface MarkFalsePositiveRequest {
+  note?: string;
 }
 
 export interface ResumeDecisionRequest {
@@ -44,6 +51,7 @@ export interface ResumeDecisionResponse {
 
 export type TraceStepType =
   | "signal_detected"
+  | "gate_decision"
   | "sql_generated"
   | "sql_executed"
   | "context_built"
@@ -56,6 +64,10 @@ export interface TraceStep {
   sql?: string;
   retry_count?: number;
   timestamp: string;
+  /** Populated only on the "decision" step, when the decision carries a
+   * recommendation -- rendered as a distinct "Recommended Action" block
+   * instead of being re-parsed out of `detail`. */
+  recommendation?: string;
 }
 
 export interface ReportMeta {
@@ -263,6 +275,101 @@ export interface DataCoverage {
   start_date: string | null;
   end_date: string | null;
   trip_count: number;
+  // Most recent date with substantial trip volume -- distinct from
+  // `end_date` (the literal max, which can be a sparse live-replay tail
+  // day). The date-range picker defaults its window to end here, not at
+  // `end_date`, so first-load always shows meaningful data; `start_date`/
+  // `end_date` remain its outer slider bounds.
+  dense_end_date: string | null;
+}
+
+// A user-picked (or default) window for the sliding date-range picker --
+// "YYYY-MM-DD" strings, both ends inclusive. Passed through to every
+// chart/insight endpoint that accepts since/until overrides.
+export interface DateRange {
+  since: string;
+  until: string;
+}
+
+// --- SP-B Settings page: per-signal-type thresholds/gate-mode/cadence,
+// global gate policy, and an at-a-glance usage/health snapshot.
+export type GateMode = "auto" | "force_suppress" | "force_rule_only" | "force_escalate";
+export type NotificationCadence = "immediate" | "hourly" | "every_2_hours" | "daily" | "weekly";
+
+export interface SignalRuleParams {
+  signal_type: string;
+  params: Record<string, number | string>;
+  gate_mode: GateMode;
+  notification_cadence: NotificationCadence;
+  updated_at: string;
+  updated_by?: string | null;
+}
+
+export interface GateSettings {
+  recurrence_window_hours: number;
+  recurrence_suppress_after: number;
+  max_consecutive_suppressions: number;
+  rule_only_margin_ratio: number;
+  max_fp_rate_for_rule_only: number;
+  min_confidence_for_rule_only: number;
+  max_healthy_suppression_rate: number;
+  escalation_after_hours_critical: number;
+  escalation_after_hours_high: number;
+  escalation_after_hours_medium: number;
+  updated_at: string;
+  updated_by?: string | null;
+}
+
+export interface RulesResponse {
+  signal_rules: SignalRuleParams[];
+  gate_settings: GateSettings;
+}
+
+export interface RulesUpdateRequest {
+  signal_rules?: SignalRuleParams[];
+  gate_settings?: GateSettings;
+  updated_by?: string;
+}
+
+export interface FalsePositiveRateEntry {
+  signal_type: string;
+  dispatched_count: number;
+  false_positive_count: number;
+  false_positive_rate_pct: number;
+}
+
+export interface UsageStatsResponse {
+  llm_calls_today: number;
+  llm_daily_limit: number;
+  gate_counts_today: Record<string, number>;
+  false_positive_rate_by_signal_type: FalsePositiveRateEntry[];
+  suppression_warnings: string[];
+}
+
+// --- SP-B aggregated insights + cost-optimization-for-a-window
+export interface AggregatedInsightsResponse {
+  no_shows_today?: number | null;
+  no_shows_this_week?: number | null;
+  no_shows_trend_pct?: number | null;
+  no_shows_trend_direction?: MetricTrend | null;
+  flagged_driver_count?: number | null;
+  total_drivers_evaluated?: number | null;
+}
+
+export interface CostOptimizationOpportunity {
+  vendor_name: string;
+  cv_pct: number;
+  recommendation: string;
+}
+
+export interface CostOptimizationResponse {
+  window_start: string;
+  window_end: string;
+  window_total_inr: number;
+  baseline_avg_per_day_inr: number;
+  trend_pct?: number | null;
+  trend_direction: MetricTrend;
+  opportunities: CostOptimizationOpportunity[];
 }
 
 export interface ApiClient {
@@ -289,11 +396,19 @@ export interface ApiClient {
   getScopeOptions(persona: PersonaId): Promise<ScopeOption[]>;
   postChat(body: ChatRequest): Promise<ChatResponse>;
   getActivity(opts?: PageOpts): Promise<Paginated<ActivityEntry>>;
-  getOtaTrend(days?: number): Promise<ChartSeriesData>;
-  getDelayReasons(days?: number): Promise<ChartSeriesData>;
-  getNoShowTrend(days?: number): Promise<ChartSeriesData>;
-  getAbsenceSplit(days?: number): Promise<PieChartData>;
-  getBillingDiscrepancy(months?: number): Promise<ChartSeriesData>;
-  getEmissionsByFuel(days?: number): Promise<ChartSeriesData>;
-  getVendorScorecard(days?: number): Promise<VendorScorecardData>;
+  getOtaTrend(days?: number, range?: DateRange): Promise<ChartSeriesData>;
+  getDelayReasons(days?: number, range?: DateRange): Promise<ChartSeriesData>;
+  getNoShowTrend(days?: number, range?: DateRange): Promise<ChartSeriesData>;
+  getAbsenceSplit(days?: number, range?: DateRange): Promise<PieChartData>;
+  getBillingDiscrepancy(months?: number, range?: DateRange): Promise<ChartSeriesData>;
+  getEmissionsByFuel(days?: number, range?: DateRange): Promise<ChartSeriesData>;
+  getVendorScorecard(days?: number, range?: DateRange): Promise<VendorScorecardData>;
+  getSignalGateFunnel(days?: number): Promise<ChartSeriesData>;
+  getLlmUsage(days?: number): Promise<ChartSeriesData>;
+  getRules(): Promise<RulesResponse>;
+  updateRules(body: RulesUpdateRequest): Promise<RulesResponse>;
+  getUsageStats(): Promise<UsageStatsResponse>;
+  markFalsePositive(id: string, body?: MarkFalsePositiveRequest): Promise<ResumeDecisionResponse>;
+  getPersonaInsights(persona: PersonaId): Promise<AggregatedInsightsResponse>;
+  getCostOptimization(since?: string, until?: string): Promise<CostOptimizationResponse>;
 }
