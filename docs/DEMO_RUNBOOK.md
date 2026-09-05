@@ -4,9 +4,11 @@ One section per judging criterion (official problem statement PDF, §9). Each na
 
 **Setup (before the jury arrives):**
 ```bash
-docker compose up -d
+docker compose --profile tunnel up -d
 docker compose logs cloudflared   # grab the public URL
 ```
+(`cloudflared` is opt-in via `--profile tunnel` — see README.md's "Optional:
+public URL" section. Omit it to just use `http://localhost:5173`.)
 Confirm `docker compose ps` shows all 7 services healthy and the `seed` job completed (`docker compose logs seed | tail -30` — should end with "seed: done", and if `data/` is present, real-data ingestion + triggers applied).
 
 ---

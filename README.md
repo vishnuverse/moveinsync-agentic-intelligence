@@ -239,11 +239,10 @@ cat docs/PROBLEM_STATEMENT.md
 docker compose up --build
 ```
 
-This boots postgres, redis, the backend/scheduler, the frontend, and a
-Cloudflare Tunnel — see the header comment in
-[`docker-compose.yml`](docker-compose.yml) for the public URL. The app works
-out of the box on generated synthetic data; no dataset download is required
-to run it.
+This boots postgres, redis, the backend/scheduler, and the frontend — the
+full app, at **http://localhost:5173**, no Cloudflare account or any other
+external service needed. The app works out of the box on generated synthetic
+data; no dataset download is required to run it.
 
 #### Optional: real dataset
 
@@ -273,6 +272,51 @@ data:
    it skips re-ingesting since the data's already there — so this is a
    one-time step, not something that reruns on every boot. To force a full
    re-ingest, drop the postgres volume first: `docker compose down -v`.
+
+#### Optional: public URL via Cloudflare Tunnel
+
+Not needed to run or evaluate the app — `docker compose up` alone already
+serves the full stack at `http://localhost:5173`. This is only for sharing
+a stable public URL (e.g. for a remote demo) instead of `localhost`.
+
+The `cloudflared` service in [`docker-compose.yml`](docker-compose.yml) is
+gated behind a Compose profile and skipped by a plain `docker compose up`,
+since it needs a tunnel credentials file that only whoever owns that
+Cloudflare tunnel has (gitignored — see `.gitignore` — and never committed).
+To set up and run your own:
+
+1. Install `cloudflared` and authenticate with your own Cloudflare account —
+   see the official
+   [Cloudflare Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+   for install instructions per OS and `cloudflared tunnel login`.
+2. Create a named tunnel and route a hostname you control to it:
+   ```bash
+   cloudflared tunnel create <your-tunnel-name>
+   cloudflared tunnel route dns <your-tunnel-name> <your-hostname>
+   ```
+   This generates a credentials JSON (`cloudflared tunnel create` prints
+   where it's saved) and a tunnel ID.
+3. Replace the placeholder `tunnel:`/`credentials-file:` values and
+   `hostname:` in [`cloudflared/config.yml`](cloudflared/config.yml) with
+   your own tunnel ID and hostname, and copy your credentials JSON into
+   `cloudflared/` (same directory, gitignored — it'll sit alongside
+   `config.yml` as `<your-tunnel-id>.json`).
+4. Start the full stack with the tunnel included:
+   ```bash
+   docker compose --profile tunnel up --build
+   ```
+   If you run this often, you don't have to type `--profile tunnel` every
+   time: Compose also reads the
+   [`COMPOSE_PROFILES`](https://docs.docker.com/compose/environment-variables/envvars/#compose_profiles)
+   environment variable, including from a `.env` file in the repo root
+   (already gitignored — see `.gitignore` — so it stays local to your
+   machine). Create one with:
+   ```bash
+   echo "COMPOSE_PROFILES=tunnel" >> .env
+   ```
+   and from then on, plain `docker compose up --build` includes
+   `cloudflared` on this machine, same as before this became opt-in —
+   without changing what anyone else's `docker compose up` does.
 
 ### Development Workflow
 
