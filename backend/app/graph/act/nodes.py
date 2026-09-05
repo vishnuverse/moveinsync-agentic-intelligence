@@ -109,7 +109,21 @@ def notification_dispatch(state: ActState, config: Optional[RunnableConfig] = No
     status='needs_intervention' here (so it reads correctly even before
     interrupt_gate runs) -- interrupt_gate is still what performs the actual
     graph pause and re-confirms/updates the same row on resume.
+
+    `scheduled_for` (plan SP-B §3): computed from `notification_cadence`
+    (set upstream by supervisor.run_pipeline from the signal's configured
+    alert_rules row). The row is always written immediately -- reasoning,
+    the gate_decisions audit trail, and Trace Drawer history are never
+    delayed -- only its *visibility* is: app.services.notifications_query's
+    read-side filter hides it until `scheduled_for` passes, and the live
+    WebSocket/SSE push below is skipped entirely for a deferred item (the
+    whole point of a lower cadence tier is to not interrupt in real time;
+    it simply appears once the inbox is next read after its boundary passes).
     """
+    from datetime import datetime, timezone
+
+    from app.rules import compute_scheduled_for
+
     decision = state.get("decision", {})
     org_id = state.get("org_id") or get_contract().default_org_id
     persona = state.get("persona") or decision.get("target_persona") or "transport_manager"
@@ -120,6 +134,7 @@ def notification_dispatch(state: ActState, config: Optional[RunnableConfig] = No
     severity = _infer_severity(state, decision)
     title = state.get("title") or _default_title(decision)
     message = decision.get("summary") or decision.get("recommendation") or "Automated notification"
+    scheduled_for = compute_scheduled_for(state.get("notification_cadence"), datetime.now(timezone.utc))
 
     engine = get_engine()
     result = upsert_notification(
@@ -134,9 +149,10 @@ def notification_dispatch(state: ActState, config: Optional[RunnableConfig] = No
         thread_id=thread_id,
         related_entity_type=state.get("related_entity_type"),
         related_entity_id=state.get("related_entity_id"),
+        scheduled_for=scheduled_for,
     )
 
-    if result["created"]:
+    if result["created"] and scheduled_for is None:
         publish_event(
             notification_channel(persona),
             {

@@ -33,6 +33,15 @@ _OBSERVED_VALUE_KEY_BY_TOPIC = {
 
 
 def route_to_specialist(state: ReasonState) -> dict[str, Any]:
+    # SP-B gate (plan §1e): `rule_only` means "skip the LLM entirely" -- not
+    # just root_cause_synthesizer's final call, but ALSO call_sql_agent's/
+    # call_research_agent's own LLM calls, both of which run BEFORE
+    # impact_context_builder and would otherwise still fire even when the
+    # final synthesis step is skipped. Forcing "context_only" here is what
+    # actually makes rule_only a zero-LLM-call path end to end.
+    if state.get("gate_mode") == "rule_only":
+        return {"route": "context_only", "research_topic": None, "sql_question": None}
+
     decision = decide_route(state.get("signal"), state.get("question"))
     return {
         "route": decision.route,
@@ -115,4 +124,54 @@ def root_cause_synthesizer(state: ReasonState) -> dict[str, Any]:
         sql_result=state.get("sql_result"),
         benchmark=state.get("research_result"),
     )
+    return {"decision": decision}
+
+
+# Per-signal_type templated recommendation, used only by rule_based_decision
+# below (plan SP-B §1e) -- deliberately short and generic (this is the
+# no-LLM path: a plain, always-correct-enough next step, not a tailored
+# root-cause narrative). A signal_type with no entry here still gets a safe
+# generic fallback rather than a KeyError.
+_RULE_ONLY_RECOMMENDATION_TEMPLATES: dict[str, str] = {
+    "delay_breach": "Review route scheduling/dispatch with the vendor; this breach cleared the configured threshold by a wide margin.",
+    "cost_divergence": "Flag this vendor's invoice for a rate-card review before next settlement.",
+    "emissions_over_target": "Prioritize this route for EV/hybrid fleet rotation.",
+    "attendance_unrelated_late": "Line manager should follow up directly with the employee; transport isn't a contributing factor.",
+    "attendance_correlated_with_transport": "Do not count these lates against the employee; the shuttle is the root cause.",
+    "billing_discrepancy": "Open a vendor chargeback dispute for the flagged trips.",
+    "performance_variability": "Investigate this route/vendor's consistency, not just its average -- erratic performance often precedes a magnitude breach.",
+}
+
+
+def rule_based_decision(state: ReasonState) -> dict[str, Any]:
+    """The no-LLM path (plan SP-B §1e): reached only when
+    app.graph.reason.gate.evaluate_gate decided `rule_only` for this signal
+    -- an unambiguous, high-margin breach with a proven low false-positive
+    rate, not worth spending an LLM call on. Still produces a real
+    ReasonDecision (same shape synthesize_root_cause returns) so bridge_to_act
+    /act need zero changes: `impact_context_builder` already ran (it's pure,
+    no LLM), so this reuses its `business_impact` sentence rather than
+    emitting a bare template with no real numbers in it.
+
+    `needs_human_signoff` is always False here -- gate.py's safety floor
+    already routed anything requiring signoff (incident/escort_compliance_
+    violation/critical severity) to `escalate` before this node could ever
+    run, so nothing reaching this node is safety-critical."""
+    signal = state.get("signal")
+    impact_context = state["impact_context"]
+    confidence = state.get("gate_confidence") or 0.75
+    gate_reason = state.get("gate_reason") or "high-margin, unambiguous breach"
+    signal_type = signal.signal_type if signal else ""
+    recommendation = _RULE_ONLY_RECOMMENDATION_TEMPLATES.get(
+        signal_type, "Review the flagged item; the rule engine found no ambiguity requiring deeper analysis."
+    )
+    decision: dict[str, Any] = {
+        "summary": signal.summary if signal else impact_context.get("business_impact", "Rule-based determination."),
+        "root_cause": f"Rule-based determination ({gate_reason}) -- {impact_context.get('business_impact', '')}",
+        "recommendation": recommendation,
+        "confidence": confidence,
+        "needs_human_signoff": False,
+        "target_persona": state.get("persona") or "transport_manager",
+        "supporting_evidence": [f"signal[{signal.source}]: {signal.summary}"] if signal else [],
+    }
     return {"decision": decision}

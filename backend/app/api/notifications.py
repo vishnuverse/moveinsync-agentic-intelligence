@@ -26,13 +26,14 @@ from langgraph.types import Command
 
 from app.api.deps import default_org_id, get_top_graph
 from app.api.schemas import (
+    MarkFalsePositiveRequest,
     NotificationItem,
     NotificationListResponse,
     PersonaId,
     ResumeDecisionRequest,
     ResumeDecisionResponse,
 )
-from app.graph.act.db import get_engine, get_notification
+from app.graph.act.db import get_engine, get_notification, mark_false_positive
 from app.services.notifications_query import count_notifications, list_notifications, to_frontend_status
 
 router = APIRouter(tags=["notifications"])
@@ -55,6 +56,7 @@ def get_notifications(
             status=to_frontend_status(row["status"]),
             thread_id=row["thread_id"] or "",
             created_at=row["created_at"].isoformat(),
+            is_false_positive=bool(row.get("is_false_positive")),
         )
         for row in rows
     ]
@@ -104,4 +106,32 @@ def resume_notification(notification_id: str, body: ResumeDecisionRequest) -> Re
         id=notification_id,
         status=to_frontend_status(final_row.get("status") or ("acked" if approved else "resolved")),
         resolved_at=(final_row.get("updated_at") or resolved_at).isoformat(),
+    )
+
+
+@router.post("/notifications/{notification_id}/false-positive", response_model=ResumeDecisionResponse)
+def mark_notification_false_positive(
+    notification_id: str, body: MarkFalsePositiveRequest
+) -> ResumeDecisionResponse:
+    """Plan SP-B §7: a human marking a dispatched alert as wrong. Deliberately
+    small -- a feedback *signal* for a human tuning thresholds in Settings
+    (surfaced via GET /api/settings/usage's false_positive_rate_by_signal_type),
+    not an automatic training loop."""
+    try:
+        nid = int(notification_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"notification '{notification_id}' not found")
+
+    engine = get_engine()
+    row = get_notification(engine, nid)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"notification '{notification_id}' not found")
+
+    mark_false_positive(engine, notification_id=nid, note=body.note)
+
+    final_row = get_notification(engine, nid) or row
+    return ResumeDecisionResponse(
+        id=notification_id,
+        status=to_frontend_status(final_row.get("status") or "resolved"),
+        resolved_at=(final_row.get("updated_at") or datetime.now(timezone.utc)).isoformat(),
     )

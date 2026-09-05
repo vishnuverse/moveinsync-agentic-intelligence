@@ -4,11 +4,11 @@ export function ActivityPage() {
   return (
     <div>
       <div className="dashboard-heading">
-        <h2>Agent Activity</h2>
+        <h2>Activity Log</h2>
         <p>
-          System-wide autonomous run log, across all personas — proof the agent acts without a
-          person prompting it. Each row fired on a schedule tick or a live data event, never a
-          click.
+          A read-only audit trail of every autonomous pipeline run, across ALL personas — not a
+          to-do list (that's Notifications). Each row fired on its own, on a schedule tick or a
+          live data event, never a click, and shows what the agent found and decided.
         </p>
       </div>
       <AgentActivity />

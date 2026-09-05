@@ -9,6 +9,11 @@ import "./TraceDrawer.css";
 
 const STEP_LABELS: Record<TraceStep["step"], string> = {
   signal_detected: "Signal Detected",
+  // SP-B (plan §8): the gate's own suppress/rule-only/escalate decision --
+  // a distinct step type so "a rule decided this" reads visually different
+  // from "the LLM decided this" (see .trace-step-dot-gate_decision in
+  // TraceDrawer.css).
+  gate_decision: "Gate Evaluated",
   sql_generated: "SQL Generated",
   sql_executed: "SQL Executed",
   context_built: "Context Attached",
@@ -23,9 +28,14 @@ export function TraceDrawer() {
   const { persona, uiState, closeTrace, notifyResolved, recordActivity } = useAppState();
   const { trace } = uiState;
   const [steps, setSteps] = useState<TraceStep[]>([]);
+  // SP-B (plan §8): "thoughts and query in a collapsed window" -- every step
+  // starts collapsed; indices in this set are expanded. Reset whenever a new
+  // trace loads (see loadTrace below).
+  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [submitting, setSubmitting] = useState<"approve" | "reject" | null>(null);
   const [resolved, setResolved] = useState(false);
+  const [markedFalsePositive, setMarkedFalsePositive] = useState(false);
   const [confirmingReject, setConfirmingReject] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -35,6 +45,7 @@ export function TraceDrawer() {
   function loadTrace() {
     if (!trace.threadId) return;
     setStatus("loading");
+    setExpandedSteps(new Set());
     withTimeout(api.getTrace(trace.threadId))
       .then((result) => {
         setSteps(result);
@@ -43,9 +54,19 @@ export function TraceDrawer() {
       .catch(() => setStatus("error"));
   }
 
+  function toggleStep(idx: number) {
+    setExpandedSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }
+
   useEffect(() => {
     if (!trace.open || !trace.threadId) return;
     setResolved(false);
+    setMarkedFalsePositive(false);
     setConfirmingReject(false);
     setActionError(null);
     loadTrace();
@@ -113,6 +134,28 @@ export function TraceDrawer() {
     }
   }
 
+  async function handleMarkFalsePositive() {
+    if (!trace.actionTargetId) return;
+    setSubmitting("approve"); // reuse the existing busy-state styling, no separate "fp" submitting value needed
+    setActionError(null);
+    try {
+      await withTimeout(api.markFalsePositive(trace.actionTargetId));
+      setMarkedFalsePositive(true);
+      notifyResolved(trace.actionTargetId, "acked");
+      recordActivity({
+        id: `local-fp-${trace.actionTargetId}-${Date.now()}`,
+        persona,
+        action: `You marked "${trace.title ?? "a notification"}" as a false positive.`,
+        timestamp: new Date().toISOString(),
+        triggered_by: "event",
+      });
+    } catch {
+      setActionError("Couldn't record that as a false positive -- try again.");
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
   return (
     <>
       <div
@@ -153,27 +196,48 @@ export function TraceDrawer() {
           )}
           {status === "ready" && steps.length > 0 && (
             <ol className="trace-steps">
-              {steps.map((step, idx) => (
-                <li key={idx} className="trace-step">
-                  <div className="trace-step-marker">
-                    <span className={`trace-step-dot trace-step-dot-${step.step}`} />
-                    {idx < steps.length - 1 && <span className="trace-step-line" />}
-                  </div>
-                  <div className="trace-step-content">
-                    <div className="trace-step-heading">
-                      <span className="trace-step-label">{STEP_LABELS[step.step]}</span>
-                      <span className="trace-step-time">{formatTime(step.timestamp)}</span>
+              {steps.map((step, idx) => {
+                const expanded = expandedSteps.has(idx);
+                return (
+                  <li key={idx} className="trace-step">
+                    <div className="trace-step-marker">
+                      <span className={`trace-step-dot trace-step-dot-${step.step}`} />
+                      {idx < steps.length - 1 && <span className="trace-step-line" />}
                     </div>
-                    <p className="trace-step-detail">{step.detail}</p>
-                    {typeof step.retry_count === "number" && step.retry_count > 0 && (
-                      <span className="badge badge-warning">
-                        self-corrected × {step.retry_count}
-                      </span>
-                    )}
-                    {step.sql && <pre className="trace-sql">{step.sql}</pre>}
-                  </div>
-                </li>
-              ))}
+                    <div className="trace-step-content">
+                      <button
+                        type="button"
+                        className="trace-step-header"
+                        aria-expanded={expanded}
+                        onClick={() => toggleStep(idx)}
+                      >
+                        <span className="trace-step-label">{STEP_LABELS[step.step]}</span>
+                        <span className="trace-step-time">{formatTime(step.timestamp)}</span>
+                        <span className={`trace-step-chevron${expanded ? " trace-step-chevron-open" : ""}`} aria-hidden="true">
+                          ▸
+                        </span>
+                      </button>
+                      {expanded && (
+                        <div className="trace-step-body">
+                          <p className="trace-step-detail">{step.detail}</p>
+                          {typeof step.retry_count === "number" && step.retry_count > 0 && (
+                            <span className="badge badge-warning">
+                              self-corrected × {step.retry_count}
+                            </span>
+                          )}
+                          {step.recommendation && (
+                            <div className="trace-recommended-action">
+                              <span className="trace-recommended-action-label">✅ Recommended Action</span>
+                              <p>{step.recommendation}</p>
+                            </div>
+                          )}
+                          {step.sql && <pre className="trace-sql">{step.sql}</pre>}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           )}
         </div>
@@ -220,7 +284,39 @@ export function TraceDrawer() {
                 >
                   Reject…
                 </button>
+                {trace.actionTargetId && !trace.isFalsePositive && (
+                  <button
+                    type="button"
+                    className="trace-drawer-reject-trigger trace-drawer-fp-trigger"
+                    disabled={submitting !== null}
+                    onClick={handleMarkFalsePositive}
+                  >
+                    Mark as false positive
+                  </button>
+                )}
               </>
+            )}
+            {actionError && <p className="trace-drawer-error">{actionError}</p>}
+          </footer>
+        )}
+
+        {/* SP-B §7: for a plain notification with no sign-off requirement
+            (trace.actions !== "approve-reject") -- still worth letting a
+            persona flag as wrong, since only incident/escort/critical items
+            ever require sign-off, and everything else can still be noise. */}
+        {trace.actions !== "approve-reject" && trace.actionTargetId && !trace.isFalsePositive && (
+          <footer className="trace-drawer-footer trace-drawer-fp-footer">
+            {markedFalsePositive ? (
+              <p className="trace-drawer-resolved">Marked as false positive.</p>
+            ) : (
+              <button
+                type="button"
+                className="trace-drawer-reject-trigger"
+                disabled={submitting !== null}
+                onClick={handleMarkFalsePositive}
+              >
+                {submitting === "approve" ? "Marking…" : "Mark as false positive"}
+              </button>
             )}
             {actionError && <p className="trace-drawer-error">{actionError}</p>}
           </footer>
