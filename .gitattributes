@@ -1,0 +1,8 @@
+# Force LF for files that run inside Linux containers/shells, regardless of
+# a developer's core.autocrlf setting (Windows Git defaults to autocrlf=true,
+# which silently rewrites these to CRLF on checkout and breaks `sh` scripts
+# like backend/db/seed/entrypoint.sh -- "set -eu\r" is an illegal option to
+# `set`, since the trailing \r becomes part of the option string).
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
