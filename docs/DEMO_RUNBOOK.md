@@ -38,7 +38,7 @@ Say explicitly: *"These are real trips from the provided dataset, re-inserted wi
 
 ## 4. Architecture & code quality (20 pts) — "sound structure, deployable, a team could build on it"
 
-- **Decoupling proof:** show `backend/config/data_contract.yaml` vs. `data_contract.synthetic.yaml` — same logical entity/column keys, different physical mapping. Say: *"Point this at MoveInSync's real production schema by editing this one file — nothing else in the codebase changes."*
+- **Decoupling proof:** show `backend/config/data_contract.yaml` — every sense/reason/act query and dashboard metric goes through these logical→physical mappings. Say: *"Point this at MoveInSync's real production schema by editing this one file — nothing else in the codebase changes."*
 - **Interrupt/HITL walkthrough:** trigger (or already-triggered from the replay above) a `needs-intervention` item — e.g. the escort-violation flow. Open it, show the trace (why the agent wants to act), click Approve. Point out: the send only fires after approval, and re-clicking Approve doesn't double-send — LangGraph's `interrupt()`/`Command(resume=...)` primitive, not a hand-rolled flag.
 - Brief repo walkthrough if time allows: `backend/app/graph/{sense,reason,act}/` mirrors the sense→reason→act architecture directly in the folder structure.
 

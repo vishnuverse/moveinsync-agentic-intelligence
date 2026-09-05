@@ -1,7 +1,10 @@
 # backend/db
 
-Default/reference Postgres schema + synthetic seed data (plan §7/§8). This is
-what `backend/config/data_contract.yaml` points at out of the box.
+App/infra/reference Postgres schema + reference seed data (plan §7/§8). The
+real business data lives in the `mis` schema (see `real_data/`); this schema
+holds only the non-business tables `backend/config/data_contract.yaml` and the
+app depend on: `sustainability_targets`, `data_quality_flags`,
+`agent_notifications`, `agent_reports`.
 
 ## Local setup
 
@@ -22,7 +25,7 @@ Apply the schema:
 psql "postgresql://moveinsync:moveinsync@localhost:5432/moveinsync" -f backend/db/schema.sql
 ```
 
-Seed synthetic data (Python 3.11+, `psycopg[binary]` and `PyYAML` installed):
+Seed reference data — sustainability targets (Python 3.11+, `psycopg[binary]` installed):
 
 ```bash
 DATABASE_URL="postgresql://moveinsync:moveinsync@localhost:5432/moveinsync" \

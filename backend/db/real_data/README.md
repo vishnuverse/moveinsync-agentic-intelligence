@@ -68,20 +68,13 @@ data/*.csv  --COPY-->  stg.*  (raw text, one table per source file)
 4. The default `backend/config/data_contract.yaml` already points at `mis.*`
    -- no further config needed for the backend to read real data.
 
-## Switching back to synthetic data
+## Real data only
 
-`backend/app/contracts/loader.py` already supports a `DATA_CONTRACT_PATH` env
-var (this predates this task -- no loader code changed):
-
-```bash
-DATA_CONTRACT_PATH=backend/config/data_contract.synthetic.yaml <run backend/seed>
-```
-
-`backend/config/data_contract.synthetic.yaml` is a verbatim copy of the
-contract that shipped before real data landed, still pointing at
-`backend/db/schema.sql` + `backend/db/seed/generate.py`'s `public.*` tables.
-Both schemas (`public` and `mis`) can coexist in the same database at once;
-which one the app reads is purely which contract file is active.
+This project runs solely on the real dataset in the `mis` schema. The former
+synthetic contract (`data_contract.synthetic.yaml`) and the `public.*`
+business tables were removed. `backend/app/contracts/loader.py` still reads a
+`DATA_CONTRACT_PATH` env var, so the contract can be repointed at any other
+real Postgres schema by supplying a different mapping file -- no code changes.
 
 ## What's real vs. synthesized
 

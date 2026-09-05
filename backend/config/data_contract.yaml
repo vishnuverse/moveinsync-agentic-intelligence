@@ -13,19 +13,14 @@
 # hierarchy, the driver dimension, and emission factors are all clearly
 # flagged there).
 #
-# Every logical entity/column KEY here is identical to
-# backend/config/data_contract.synthetic.yaml (the preserved fallback this
-# file replaced as the default) -- only the physical table/column targets
-# changed, plus one new entity (`feedback`) that is purely additive. Nothing
-# in backend/app/graph/{sense,reason,act}/ needed to change. `notification`
-# and `report` are act-layer output tables (backend/app/graph/act/), not raw
-# business data, and are unaffected by the real-data migration -- they stay
-# on `public.agent_notifications` / `public.agent_reports`.
-#
-# To go back to the synthetic seed data at any time:
-#   DATA_CONTRACT_PATH=backend/config/data_contract.synthetic.yaml <run backend>
-# (backend/app/contracts/loader.py already reads this env var; see its
-# _CONTRACT_PATH_ENV_VAR / _DEFAULT_CONTRACT_PATH.)
+# This is the ONLY data contract now -- the project runs solely on the real
+# `mis.*` dataset (the former synthetic contract and the public.* business
+# tables were removed). `notification` and `report` are act-layer output
+# tables (backend/app/graph/act/), not raw business data -- they stay on
+# `public.agent_notifications` / `public.agent_reports`. loader.py still reads
+# a DATA_CONTRACT_PATH env var, so this contract can be repointed at any other
+# real Postgres schema by supplying a different mapping file -- that's the
+# decoupling: change this one file, no code changes.
 
 version: 2
 default_org_id: vanta-Aus  # one of the 5 real business units (see below); used only as a fallback scope when no org is specified

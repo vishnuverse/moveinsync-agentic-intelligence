@@ -59,7 +59,7 @@ Large effort decomposed into four sub-projects. **Sequence: A → B → C (→ D
 - [ ] Predictive signal (forecast delay/cost breach) — flips reactive → proactive; pairs with external enrichment.
 - [ ] External enrichment (weather/traffic) — research agent is a curated lookup, not web/API search.
 - [ ] Fix README + real architecture diagram (current docs are the hackathon template, undersell the real system).
-- [ ] Latent bug: `triggers.sql`/`sense/listener.py` reference synthetic tables while active contract is `mis.*` — real-data NOTIFY relies on `real_data/triggers.sql`; add golden test + fix.
+- [x] Latent bug RESOLVED: the synthetic `triggers.sql` (NOTIFY on `public.route_trips` etc.) was removed entirely as part of the synthetic-schema teardown — the event path now relies solely on `real_data/triggers.sql` on `mis.*`. See §7.
 - [ ] Config-drive sense thresholds per-org (currently hardcoded constants).
 - [ ] Multi-tenancy seam (loop N orgs, scoped principal), per-tenant token-based LLM budget + response cache (auth/CORS are demo-open today).
 
@@ -83,6 +83,15 @@ Large effort decomposed into four sub-projects. **Sequence: A → B → C (→ D
 - [x] **Mock-default flip.** `api/index.ts` now defaults to REAL; mock is opt-in (`VITE_USE_MOCK === "true"`).
 - [x] **Bugfix: Outbox "couldn't load".** It requested `limit:500` but the paginated endpoint caps at 200 (422). Changed to `limit:200`. **Verified loads.**
 - Audit answer (no gaps): every real ApiClient method → a registered backend route backed by real DB queries; only intentional statics remain (`getRoles`), mock client is the standalone-dev fallback only. "Do all features need live?" → No: live/SSE on Notifications + Activity (time-sensitive); dashboards/reports/trends stay fetch-on-load.
+
+## 7. Synthetic schema removal — DONE & verified (2026-09-05)
+
+Context: a "99.9% of data is missing" report was querying the synthetic `public` seed schema; the real data is fully in `mis.*`. Decision: run on real data only, remove synthetic entirely.
+
+- [x] Dropped the 12 synthetic `public` business tables (route_trips, routes, vendors, drivers, teams, employees, route_costs, safety_incidents, vendor_invoices, emissions_log, commute_logs, attendance_records) + the dead unused `sql_agent_examples`. Kept infra/app/reference: agent_notifications, agent_reports, chat_threads, pipeline_runs, data_quality_flags, sustainability_targets, LangGraph checkpoints, LangMem store. **Verified: mis.trip still 608,832; all endpoints return data; no errors.**
+- [x] `schema.sql` reduced to the kept tables; `backend/db/triggers.sql` deleted (synthetic-only NOTIFY — resolves the V6 latent bug); `seed/generate.py` reduced to a reference-only seeder (sustainability_targets only, matching the 3 metric_names the reason layer looks up); `seed/entrypoint.sh` gates retargeted off `teams` → `sustainability_targets` and the triggers.sql apply removed.
+- [x] Deleted `data_contract.synthetic.yaml`; updated the now-stale references (data_contract.yaml header, docker-compose.yml, db/README.md, real_data/README.md, api_schema.sql, DEMO_RUNBOOK.md, listener.py/Dockerfile comments).
+- Full fresh-boot acceptance (`docker compose down -v && up --build` with real CSVs present) left for the user to run; live drop + rebuild + smoke all pass on the current volume.
 
 ## 5. Session decisions log
 

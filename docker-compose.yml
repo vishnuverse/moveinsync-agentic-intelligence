@@ -2,8 +2,9 @@
 #
 # Run:
 #   docker compose up --build
-# The `seed` job applies backend/db/{schema,triggers,api_schema}.sql and
-# generates synthetic data on first boot, then exits -- `backend`/`scheduler`
+# The `seed` job applies backend/db/{schema,api_schema}.sql, seeds reference
+# data (sustainability targets), and ingests the real dataset when the CSVs
+# are present in data/, then exits -- `backend`/`scheduler`
 # wait for it via `depends_on: condition: service_completed_successfully`.
 #
 # Public demo URL: https://app.inferencezero.com -- a named Cloudflare Tunnel

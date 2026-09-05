@@ -23,16 +23,16 @@ done
 # already-seeded volume would otherwise fail this job on "relation already
 # exists" and, via `depends_on: service_completed_successfully`, permanently
 # block backend/scheduler from starting on every restart after the first.
-# Guard on whether `teams` (schema.sql's first table) already exists instead.
-SCHEMA_APPLIED=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('public.teams') IS NOT NULL")
+# Guard on whether `sustainability_targets` (a schema.sql table) already exists.
+# NOTE: db/triggers.sql is gone -- it only ever defined NOTIFY triggers on the
+# retired synthetic business tables; the real-data event path uses
+# db/real_data/triggers.sql (applied post-ingest below).
+SCHEMA_APPLIED=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('public.sustainability_targets') IS NOT NULL")
 if [ "$SCHEMA_APPLIED" = "t" ]; then
-    echo "seed: schema already applied, skipping schema.sql/triggers.sql"
+    echo "seed: schema already applied, skipping schema.sql"
 else
     echo "seed: applying schema.sql"
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
-
-    echo "seed: applying triggers.sql"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/triggers.sql
 fi
 
 # api_schema.sql is additive-only (CREATE TABLE IF NOT EXISTS) -- always safe
@@ -40,15 +40,14 @@ fi
 echo "seed: applying api_schema.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/api_schema.sql
 
-# generate.py TRUNCATEs+reinserts its own tables every call (see
-# backend/db/README.md), which is safe but throws away anything a demo user
-# did in the app and burns time on every restart -- so only run it the first
-# time `teams` (its first INSERT target) is actually empty.
-SYNTHETIC_SEEDED=$(psql "$DATABASE_URL" -tAc "SELECT EXISTS (SELECT 1 FROM teams)")
-if [ "$SYNTHETIC_SEEDED" = "t" ]; then
-    echo "seed: synthetic data already present (teams is non-empty), skipping generate.py"
+# generate.py now only (re)seeds the reference benchmarks in
+# sustainability_targets (see backend/db/README.md) -- there is no synthetic
+# business data any more. Run it once, the first time that table is empty.
+REFERENCE_SEEDED=$(psql "$DATABASE_URL" -tAc "SELECT EXISTS (SELECT 1 FROM sustainability_targets)")
+if [ "$REFERENCE_SEEDED" = "t" ]; then
+    echo "seed: reference data already present (sustainability_targets non-empty), skipping generate.py"
 else
-    echo "seed: generating synthetic data"
+    echo "seed: seeding reference data (sustainability_targets)"
     python db/seed/generate.py
 fi
 
@@ -56,13 +55,12 @@ fi
 # default, points at mis.* -- see backend/db/real_data/README.md). Only
 # runs when the real CSVs are actually present (DATA_DIR, mounted from the
 # host's gitignored data/ folder -- see docker-compose.yml) since that
-# ~550MB dataset isn't part of the image/repo and a fresh clone without it
-# should still boot cleanly on synthetic data alone (data_contract.yaml
-# would then point at empty mis.* tables -- flip DATA_CONTRACT_PATH to
-# data_contract.synthetic.yaml in that case, per this seed job's own
-# skip-message below). Gated on `mis.trip` (ingest.py's fact table) already
-# having rows, independent of the synthetic gate above, so this stage alone
-# re-runs if CSVs show up in a later `docker compose up`.
+# ~550MB dataset isn't part of the image/repo. A fresh clone without it still
+# boots cleanly, but data_contract.yaml then points at empty mis.* tables
+# (this project runs on the real dataset only -- add the CSVs to data/ and
+# re-run to populate). Gated on `mis.trip` (ingest.py's fact table) already
+# having rows, independent of the reference-seed gate above, so this stage
+# alone re-runs if CSVs show up in a later `docker compose up`.
 REAL_DATA_INGESTED=$(psql "$DATABASE_URL" -tAc "SELECT CASE WHEN to_regclass('mis.trip') IS NULL THEN false ELSE EXISTS (SELECT 1 FROM mis.trip) END")
 if [ "$REAL_DATA_INGESTED" = "t" ]; then
     echo "seed: real data already ingested (mis.trip is non-empty), skipping ingest.py"
@@ -77,8 +75,8 @@ elif [ -n "${DATA_DIR:-}" ] && [ -f "${DATA_DIR}/emp_Data.csv" ]; then
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/real_data/triggers.sql
 else
     echo "seed: no real data at DATA_DIR=${DATA_DIR:-<unset>} -- skipping real-data ingestion." \
-         "backend/config/data_contract.yaml still points at mis.* (now empty)." \
-         "Set DATA_CONTRACT_PATH=backend/config/data_contract.synthetic.yaml on backend/scheduler to run on synthetic data instead."
+         "backend/config/data_contract.yaml points at mis.* (now empty) -- drop the dataset CSVs into data/" \
+         "and re-run 'docker compose up' to populate it (this project runs on the real dataset only)."
 fi
 
 echo "seed: done"

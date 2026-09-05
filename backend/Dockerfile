@@ -5,7 +5,7 @@
 FROM python:3.11-slim
 
 # postgresql-client: only used by the `seed` service's entrypoint (psql -f
-# schema.sql/triggers.sql/api_schema.sql) -- kept in this shared image rather
+# schema.sql/api_schema.sql + real_data ingest) -- kept in this shared image rather
 # than a separate one so docker-compose.yml can run the seed job with
 # `image: backend` + a different command instead of building a 4th image.
 RUN apt-get update \

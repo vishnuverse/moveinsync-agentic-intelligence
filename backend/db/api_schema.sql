@@ -1,12 +1,10 @@
 -- API-layer addition to backend/db/schema.sql (plan §10/§11's `GET /api/activity`
 -- endpoint needs SOME persistence of pipeline-run history that doesn't exist yet
 -- as a dedicated table). Kept in a separate file rather than editing schema.sql
--- directly, same convention backend/db/triggers.sql already established for
--- staying out of the schema-owning agent's file.
+-- directly, to stay out of the schema-owning file.
 --
--- Apply AFTER schema.sql (+ triggers.sql):
+-- Apply AFTER schema.sql:
 --   psql "$DATABASE_URL" -f backend/db/schema.sql
---   psql "$DATABASE_URL" -f backend/db/triggers.sql
 --   psql "$DATABASE_URL" -f backend/db/api_schema.sql
 --
 -- Written to by app/schedulers/interval.py's _tick and

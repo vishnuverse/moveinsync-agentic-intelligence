@@ -2,11 +2,12 @@
 
 Owns one dedicated, long-lived `asyncpg` connection -- kept entirely separate
 from any FastAPI/SQLAlchemy request-serving pool, so a slow reconnect here
-never blocks a web server's event loop. Pairs with `backend/db/triggers.sql`,
-which must be applied *after* `backend/db/schema.sql` (that file isn't
-touched by this module -- it's owned by the schema agent) and fires
-`pg_notify('moveinsync_events', ...)` on insert into `route_trips`,
-`safety_incidents`, `route_costs`, and `emissions_log`.
+never blocks a web server's event loop. Pairs with
+`backend/db/real_data/triggers.sql` (applied post-ingest), which fires
+`pg_notify('moveinsync_events', ...)` on insert into the real `mis.*` fact
+tables (trip / incident / cost / emission). (The old synthetic
+`backend/db/triggers.sql` on `public.route_trips` etc. was removed along with
+the synthetic schema -- the project runs on real `mis.*` data only.)
 
 NOTIFY payloads are minimal by design -- `{"event": ..., "table": ...,
 "id": ...}` -- well under Postgres's 8000-byte NOTIFY limit. This listener
