@@ -164,3 +164,13 @@
   color: var(--color-critical);
   font-weight: 600;
 }
+
+/* One-line plain-language framing under a chart (ChartSeriesData.summary) --
+   the absolute number behind the percentage the line is showing, so the
+   panel answers "how bad, in trips?" without a second chart. */
+.chart-panel-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}

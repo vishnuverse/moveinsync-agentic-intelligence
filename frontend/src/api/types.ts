@@ -179,6 +179,8 @@ export interface ChartSeriesData {
   comparison?: ChartComparison;
   /** Billing-discrepancy only: top vendors responsible for the gap. */
   contributors?: ChartContributor[];
+  /** One-line plain-language framing of the window, when the chart has one. */
+  summary?: string;
 }
 
 export interface PieSlice {
@@ -438,6 +440,7 @@ export interface ApiClient {
   getAbsenceSplit(days?: number, range?: DateRange): Promise<PieChartData>;
   getBillingDiscrepancy(months?: number, range?: DateRange): Promise<ChartSeriesData>;
   getEmissionsByFuel(days?: number, range?: DateRange): Promise<ChartSeriesData>;
+  getEscortCompliance(days?: number, range?: DateRange): Promise<ChartSeriesData>;
   getVendorScorecard(days?: number, range?: DateRange): Promise<VendorScorecardData>;
   getHotspotTimeline(days?: number, range?: DateRange): Promise<HotspotTimelineResponse>;
   getSignalTimeline(persona: PersonaId, days?: number, range?: DateRange): Promise<SignalTimelineResponse>;

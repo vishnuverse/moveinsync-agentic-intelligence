@@ -21,6 +21,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.contracts import get_contract
+# Imported, not re-declared: escort_compliance_trend below must define
+# "late night" exactly as detect_escort_compliance_signal does, or the Head's
+# compliance trend and the Transport Manager's violation alerts would drift
+# apart on the same underlying trips.
+from app.graph.sense.nodes import NIGHT_WINDOW_END_HOUR, NIGHT_WINDOW_START_HOUR
 from app.services.date_window import dense_anchor_date
 
 # SP-B (plan §2d): this used to be a second, independent hardcoded copy of
@@ -586,6 +591,114 @@ def emissions_by_fuel(
                 "current_value": avg_rate,
                 "previous_value": target,
                 "delta_pct": round((avg_rate - target) / target * 100.0, 1) if target else 0.0,
+            }
+    return result
+
+
+def escort_compliance_trend(
+    engine: Engine, org_id: str, days: int = 90, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
+    """PRD F1, Transport Head view: weekly fleet-wide late-night female escort
+    compliance %, against the 100% policy target.
+
+    Deliberately the SAME population `detect_escort_compliance_signal`
+    (app/graph/sense/nodes.py) alerts on -- trip JOIN commute JOIN employee,
+    `gender = 'FEMALE'`, `actual_departure` inside the 21:00-06:00 window --
+    so the Head's trend line and the Transport Manager's individual violation
+    alerts can never disagree about what a violation is. The one difference is
+    deliberate: the detector runs each `trip_direction` leg as its own
+    sub-detection, while this aggregates both legs, because the strategic
+    question is "how exposed are we overall", not "which leg failed".
+
+    Compliance is expressed as the share of those trips that DID carry an
+    escort, so the line reads the intuitive way round: up is good, and the
+    gap to 100 is the exposure.
+    """
+    contract = get_contract()
+    trip = contract.entity("trip")
+    commute = contract.entity("commute")
+    employee = contract.entity("employee")
+
+    with engine.begin() as conn:
+        if until is not None:
+            anchor = until
+        else:
+            anchor = dense_anchor_date(
+                conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id")
+            )
+            if anchor is None:
+                return {"categories": [], "series": []}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+        prev_since = window_since - (anchor - window_since)
+
+        night = (
+            f"(EXTRACT(HOUR FROM t.{trip.column('actual_departure')}) >= {NIGHT_WINDOW_START_HOUR}"
+            f" OR EXTRACT(HOUR FROM t.{trip.column('actual_departure')}) < {NIGHT_WINDOW_END_HOUR})"
+        )
+        base_from = f"""
+            FROM {trip.table} t
+            JOIN {commute.table} c ON c.{commute.column('trip_id')} = t.{trip.column('id')}
+            JOIN {employee.table} e ON e.{employee.column('id')} = c.{commute.column('employee_id')}
+            WHERE t.{trip.column('org_id')} = :org_id
+              AND e.{employee.column('gender')} = 'FEMALE'
+              AND t.{trip.column('actual_departure')} IS NOT NULL
+              AND t.{trip.column('trip_date')} > :since
+              AND t.{trip.column('trip_date')} <= :until
+              AND {night}
+        """
+
+        rows = conn.execute(
+            text(f"""
+                SELECT date_trunc('week', t.{trip.column('trip_date')})::date AS wk,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE t.{trip.column('actual_escort')}) AS escorted
+                {base_from}
+                GROUP BY wk
+                ORDER BY wk
+            """),
+            {"org_id": org_id, "since": window_since, "until": anchor},
+        ).mappings().all()
+
+        def _window_pct(w_since: date, w_until: date) -> tuple[float | None, int, int]:
+            row = conn.execute(
+                text(f"""
+                    SELECT COUNT(*) AS total,
+                           COUNT(*) FILTER (WHERE t.{trip.column('actual_escort')}) AS escorted
+                    {base_from}
+                """),
+                {"org_id": org_id, "since": w_since, "until": w_until},
+            ).mappings().first()
+            total = int(row["total"] or 0) if row else 0
+            escorted = int(row["escorted"] or 0) if row else 0
+            if total == 0:
+                return None, 0, 0
+            return round(100.0 * escorted / total, 1), total, total - escorted
+
+        current_pct, current_total, current_unescorted = _window_pct(window_since, anchor)
+        prev_pct, _, _ = _window_pct(prev_since, window_since)
+
+    categories = [row["wk"].isoformat() for row in rows]
+    data = [
+        round(100.0 * int(row["escorted"] or 0) / int(row["total"]), 1) if int(row["total"] or 0) else 0.0
+        for row in rows
+    ]
+
+    result: dict[str, Any] = {
+        "categories": categories,
+        "series": [{"name": "Escort compliance %", "data": data}],
+        "target": 100.0,
+        "target_label": "Policy target (100%)",
+    }
+    if current_pct is not None:
+        result["summary"] = (
+            f"{current_unescorted:,} of {current_total:,} late-night female trips ran unescorted"
+        )
+        if prev_pct is not None:
+            result["comparison"] = {
+                "label": f"vs previous {days}d",
+                "current_value": current_pct,
+                "previous_value": prev_pct,
+                "delta_pct": round(current_pct - prev_pct, 1),
             }
     return result
 

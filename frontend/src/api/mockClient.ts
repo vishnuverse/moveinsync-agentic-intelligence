@@ -557,6 +557,31 @@ export const mockClient: ApiClient = {
     };
   },
 
+  async getEscortCompliance(): Promise<ChartSeriesData> {
+    await delay();
+    const categories = Array.from({ length: 12 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (11 - i) * 7);
+      return d.toISOString().slice(0, 10);
+    });
+    // Trends downward, like the real data does -- a flat mock would hide the
+    // one thing this panel exists to show.
+    const data = categories.map((_, i) => Math.round((64 - i * 1.4) * 10) / 10);
+    return {
+      categories,
+      series: [{ name: "Escort compliance %", data }],
+      target: 100,
+      target_label: "Policy target (100%)",
+      summary: "11,454 of 25,058 late-night female trips ran unescorted",
+      comparison: {
+        label: "vs previous 90d",
+        current_value: data[data.length - 1],
+        previous_value: data[0],
+        delta_pct: Math.round((data[data.length - 1] - data[0]) * 10) / 10,
+      },
+    };
+  },
+
   async getLlmUsage(): Promise<ChartSeriesData> {
     await delay();
     const categories = Array.from({ length: 14 }, (_, i) => {

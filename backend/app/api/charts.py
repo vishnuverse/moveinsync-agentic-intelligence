@@ -80,6 +80,17 @@ def get_emissions_by_fuel(
     )
 
 
+@router.get("/escort-compliance", response_model=ChartSeriesData)
+def get_escort_compliance(
+    days: int = 90, since: date | None = Query(default=None), until: date | None = Query(default=None)
+) -> ChartSeriesData:
+    return ChartSeriesData(
+        **chart_data.escort_compliance_trend(
+            get_engine(), default_org_id(), days=days, since=since, until=until
+        )
+    )
+
+
 @router.get("/vendor-scorecard", response_model=VendorScorecardData)
 def get_vendor_scorecard(
     days: int = 90, since: date | None = Query(default=None), until: date | None = Query(default=None)

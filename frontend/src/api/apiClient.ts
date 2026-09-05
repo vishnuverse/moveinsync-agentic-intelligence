@@ -226,6 +226,10 @@ export const realClient: ApiClient = {
     return request<SignalTimelineResponse>(`/charts/signal-timeline${query}${sep}persona=${persona}`);
   },
 
+  getEscortCompliance(days?: number, range?: DateRange): Promise<ChartSeriesData> {
+    return request<ChartSeriesData>(`/charts/escort-compliance${rangeQuery("days", days, range)}`);
+  },
+
   getSignalGateFunnel(days?: number): Promise<ChartSeriesData> {
     return request<ChartSeriesData>(`/charts/signal-gate-funnel${days ? `?days=${days}` : ""}`);
   },

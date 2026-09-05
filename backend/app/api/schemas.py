@@ -217,9 +217,34 @@ class ChartSeries(BaseModel):
     data: list[float]
 
 
+class ChartComparison(BaseModel):
+    label: str
+    current_value: float
+    previous_value: float
+    delta_pct: float
+
+
+class ChartContributor(BaseModel):
+    name: str
+    value: float
+    pct: float
+
+
 class ChartSeriesData(BaseModel):
     categories: list[str]
     series: list[ChartSeries]
+    # These were computed by chart_data.py and then silently dropped here --
+    # the response model declared only categories/series, so every target
+    # line, comparison badge and contributor list the frontend
+    # (frontend/src/api/types.ts ChartSeriesData) was already written to
+    # render never actually reached it. Declared now, all optional, so a
+    # chart that doesn't produce them is unaffected.
+    target: Optional[float] = None
+    breach_threshold: Optional[float] = None
+    target_label: Optional[str] = None
+    comparison: Optional[ChartComparison] = None
+    contributors: Optional[list[ChartContributor]] = None
+    summary: Optional[str] = None
 
 
 class PieSlice(BaseModel):

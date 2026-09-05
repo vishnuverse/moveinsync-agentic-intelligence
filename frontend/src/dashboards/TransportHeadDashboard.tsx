@@ -27,7 +27,7 @@ export function TransportHeadDashboard() {
   // rows carry real wall-clock timestamps (unaffected by the trip data's
   // live-replay-tail gap), so "last 14 days" here already means something.
   const [signalGateFunnel, setSignalGateFunnel] = useState<ChartSeriesData | null>(null);
-  const [llmUsage, setLlmUsage] = useState<ChartSeriesData | null>(null);
+  const [escortCompliance, setEscortCompliance] = useState<ChartSeriesData | null>(null);
 
   useEffect(() => {
     if (!ready || !range) return;
@@ -35,11 +35,12 @@ export function TransportHeadDashboard() {
     api.getEmissionsByFuel(undefined, range).then(setEmissionsByFuel);
     api.getVendorScorecard(undefined, range).then(setVendorScorecard);
     api.getCostOptimization(range.since, range.until).then(setCostOptimization);
+    api.getEscortCompliance(undefined, range).then(setEscortCompliance);
   }, [ready, range]);
 
   useEffect(() => {
     api.getSignalGateFunnel(30).then(setSignalGateFunnel);
-    api.getLlmUsage(14).then(setLlmUsage);
+
   }, []);
 
   useEffect(() => {
@@ -133,8 +134,19 @@ export function TransportHeadDashboard() {
           >
             {signalGateFunnel && <BreakdownBarChart data={signalGateFunnel} stacked />}
           </ChartPanel>
-          <ChartPanel title="LLM Call Volume" subtitle="Daily calls vs. budget (tune thresholds in Settings)">
-            {llmUsage && <TrendLineChart data={llmUsage} />}
+          <ChartPanel
+            title="Late-Night Escort Compliance"
+            subtitle="Share of late-night female trips that carried the mandated escort, against the 100% policy target"
+          >
+            {escortCompliance && (
+              <>
+                <TrendLineChart data={escortCompliance} valueSuffix="%" />
+                <ComparisonBadge comparison={escortCompliance.comparison} suffix=" pts" />
+                {escortCompliance.summary && (
+                  <p className="chart-panel-note">{escortCompliance.summary}</p>
+                )}
+              </>
+            )}
           </ChartPanel>
         </div>
       }
