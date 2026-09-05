@@ -12,6 +12,8 @@ import type {
   NotificationItem,
   PersonaId,
   PieChartData,
+  ReplayRequest,
+  ReplayResponse,
   ReportMeta,
   ResumeDecisionRequest,
   ResumeDecisionResponse,
@@ -49,6 +51,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const realClient: ApiClient = {
   getRoles(): Promise<Role[]> {
     return request<Role[]>("/roles");
+  },
+
+  replayDemo(body: ReplayRequest): Promise<ReplayResponse> {
+    return request<ReplayResponse>("/demo/replay", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
 
   getDashboard(persona: PersonaId): Promise<MetricCardData[]> {

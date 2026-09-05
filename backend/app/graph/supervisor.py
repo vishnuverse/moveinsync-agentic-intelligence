@@ -242,11 +242,19 @@ def run_pipeline(org_id: str, since: datetime | None = None, event: dict[str, An
 
 
 def run_chat_turn(question: str, persona: str, org_id: str, thread_id: str | None = None) -> dict[str, Any]:
-    """reason->act for one raw NL question, bypassing sense (plan §12 step 9,
-    for the future chat endpoint backing TM2/LM2/TH4). Dispatches through act
-    too (not just reason) so a chat-surfaced insight that needs sign-off still
-    lands in the same notification inbox/interrupt flow a signal-driven one
-    would, and so the exchange gets a durable, trace-able thread_id."""
+    """Read-only reason-only pass for one raw NL question, bypassing sense
+    (plan §12 step 9, chat endpoint backing TM2/LM2/TH4).
+
+    Chat is strictly a Q&A surface: it must never write a permanent
+    `agent_notifications` row or trip the HITL interrupt_gate. So it sets
+    `skip_act=True`, which makes the top graph stop right after `reason`
+    (see app.graph.graph._route_after_reason) -- act never runs. reason still
+    executes under this thread_id, so the "How was this computed?" trace
+    (app/services/trace_builder.py reading get_state_history) is unchanged.
+
+    Because act didn't run, there is no notification_id and the turn can never
+    pause -- those degrade to None/False below rather than being read off a
+    result that never went through act."""
     checkpointer = get_checkpointer()
     top_graph = build_top_graph(checkpointer)
 
@@ -258,6 +266,7 @@ def run_chat_turn(question: str, persona: str, org_id: str, thread_id: str | Non
         "question": question,
         "scope": scope,
         "thread_id": resolved_thread_id,
+        "skip_act": True,
     }
     config = {"configurable": {"thread_id": resolved_thread_id}}
     result = top_graph.invoke(initial_state, config=config)
@@ -269,9 +278,12 @@ def run_chat_turn(question: str, persona: str, org_id: str, thread_id: str | Non
         "answer": decision.get("summary") or sql_result.get("answer", ""),
         "decision": decision,
         "generated_sql": sql_result.get("generated_sql"),
-        "notification_id": result.get("notification_id"),
+        # act never runs for a chat turn (skip_act=True), so there is no
+        # notification row and no possible interrupt -- degrade explicitly
+        # instead of reading keys act would have produced.
+        "notification_id": None,
         "needs_human_signoff": decision.get("needs_human_signoff", False),
-        "paused": "__interrupt__" in result,
+        "paused": False,
     }
 
 

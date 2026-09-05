@@ -33,6 +33,7 @@ default_org_id: vanta-Aus  # one of the 5 real business units (see below); used 
 entities:
   trip:
     table: mis.trip
+    description: employee cab trips with scheduled vs. actual departure/arrival times, delays, punctuality/OTA, and escort compliance
     columns:
       id: id
       org_id: org_id
@@ -64,6 +65,7 @@ entities:
 
   cost:
     table: mis.cost
+    description: per-trip and per-route transportation costs, cost-per-km, billing slabs, and vendor spend
     columns:
       id: id
       org_id: org_id
@@ -83,6 +85,7 @@ entities:
 
   incident:
     table: mis.incident
+    description: safety incidents and panic/SOS alerts raised on trips, their severity, type, and response/acknowledgement times
     columns:
       id: id
       org_id: org_id
@@ -106,6 +109,7 @@ entities:
 
   emission:
     table: mis.emission
+    description: per-trip CO2 emissions, carbon footprint, emissions per passenger-km, and vehicle/fuel type
     columns:
       id: id
       org_id: org_id
@@ -125,6 +129,7 @@ entities:
 
   commute:
     table: mis.commute
+    description: employee commute/ridership records - boarding and no-show behaviour on cab trips
     columns:
       id: id
       org_id: org_id
@@ -143,6 +148,7 @@ entities:
 
   attendance:
     table: mis.attendance
+    description: employee workplace attendance - clock-in/out times and lateness, used to correlate attendance with transport
     columns:
       id: id
       org_id: org_id
@@ -156,6 +162,7 @@ entities:
 
   vendor:
     table: mis.vendor
+    description: transport vendors/cab suppliers, their SLA targets, contract dates, regions, and cost rates
     columns:
       id: id
       org_id: org_id
@@ -170,6 +177,7 @@ entities:
 
   employee:
     table: mis.employee
+    description: employees who use the transport service, their team/line-manager, home/work locations, and gender
     columns:
       id: id
       org_id: org_id
@@ -189,6 +197,7 @@ entities:
 
   route:
     table: mis.route
+    description: cab routes with origin/destination, region, assigned vendor, scheduled distance, and shift type
     columns:
       id: id
       org_id: org_id
@@ -205,6 +214,7 @@ entities:
 
   team:
     table: mis.team
+    description: employee teams and their line-manager/region groupings
     columns:
       id: id
       org_id: org_id
@@ -215,6 +225,7 @@ entities:
 
   driver:
     table: mis.driver
+    description: cab drivers, the vendor they belong to, and their licence/contact details
     columns:
       id: id
       org_id: org_id
@@ -266,6 +277,7 @@ entities:
   # change the shape of any existing entity above.
   feedback:
     table: mis.feedback
+    description: employee trip feedback ratings for route, driver, cab, safety, and marshal
     columns:
       id: id
       org_id: org_id

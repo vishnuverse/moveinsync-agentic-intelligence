@@ -32,6 +32,14 @@ class TopState(TypedDict, total=False):
     persona: str | None
     signal: dict[str, Any] | None
     question: str | None
+    # When True, the top graph stops after `reason` and never enters
+    # `bridge_to_act`/`act` -- used by supervisor.run_chat_turn to make a chat
+    # Q&A turn strictly read-only (no agent_notifications row written, no
+    # interrupt_gate/HITL pause possible) while still running reason under this
+    # thread_id so the trace history (app/services/trace_builder.py reading
+    # get_state_history) is unchanged. Signal-driven run_pipeline and run_report
+    # leave this unset, so they still run act exactly as before.
+    skip_act: bool
 
     # ---- reason intermediate (trace visibility) ----
     sql_question: str

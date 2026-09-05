@@ -76,15 +76,15 @@ services:
     # shell's env, not from backend/.env (Compose only auto-loads a root-level
     # .env, never a subdirectory one) -- so the key silently resolved to
     # empty every time. env_file here loads backend/.env's real values first;
-    # SARVAM_API_KEY/OPENROUTER_API_KEY are deliberately NOT also listed under
-    # `environment:` below, since an explicit `environment:` entry overrides
-    # env_file for the same key, which would just reintroduce this bug.
+    # LLM_PROVIDER/LLM_MODEL/LLM_DAILY_CALL_LIMIT/SARVAM_API_KEY/
+    # OPENROUTER_API_KEY are deliberately NOT also listed under `environment:`
+    # below, since an explicit `environment:` entry overrides env_file for the
+    # same key, which would just reintroduce this bug (hit it twice: once for
+    # the API key, once for LLM_DAILY_CALL_LIMIT silently resetting to 500
+    # from an empty host shell var during a one-time backfill).
     env_file:
       - backend/.env
     environment:
-      LLM_PROVIDER: ${LLM_PROVIDER:-sarvam}
-      LLM_MODEL: ${LLM_MODEL:-sarvam-105b-conversations}
-      LLM_DAILY_CALL_LIMIT: ${LLM_DAILY_CALL_LIMIT:-500}
       DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
       REDIS_URL: redis://redis:6379/0
       # PUBLIC_API_BASE_URL is what report preview_url links point browsers
@@ -116,9 +116,6 @@ services:
     env_file:
       - backend/.env
     environment:
-      LLM_PROVIDER: ${LLM_PROVIDER:-sarvam}
-      LLM_MODEL: ${LLM_MODEL:-sarvam-105b-conversations}
-      LLM_DAILY_CALL_LIMIT: ${LLM_DAILY_CALL_LIMIT:-500}
       DATABASE_URL: postgresql://moveinsync:moveinsync@postgres:5432/moveinsync
       REDIS_URL: redis://redis:6379/0
       PIPELINE_INTERVAL_MINUTES: ${PIPELINE_INTERVAL_MINUTES:-5}

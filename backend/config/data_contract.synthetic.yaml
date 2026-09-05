@@ -18,6 +18,7 @@ default_org_id: moveinsync-demo
 entities:
   trip:
     table: route_trips
+    description: employee cab trips with scheduled vs. actual departure/arrival times, delays, and punctuality/OTA
     columns:
       id: id
       org_id: org_id
@@ -34,6 +35,7 @@ entities:
 
   cost:
     table: route_costs
+    description: per-trip and per-route transportation costs, cost-per-km, and vendor spend
     columns:
       id: id
       org_id: org_id
@@ -50,6 +52,7 @@ entities:
 
   incident:
     table: safety_incidents
+    description: safety incidents and panic/SOS alerts raised on trips, their severity, type, and status
     columns:
       id: id
       org_id: org_id
@@ -66,6 +69,7 @@ entities:
 
   emission:
     table: emissions_log
+    description: per-trip CO2 emissions, carbon footprint, and emissions per passenger-km
     columns:
       id: id
       org_id: org_id
@@ -81,6 +85,7 @@ entities:
 
   commute:
     table: commute_logs
+    description: employee commute/ridership records - boarding and no-show behaviour on cab trips
     columns:
       id: id
       org_id: org_id
@@ -96,6 +101,7 @@ entities:
 
   attendance:
     table: attendance_records
+    description: employee workplace attendance - clock-in/out times and lateness, used to correlate attendance with transport
     columns:
       id: id
       org_id: org_id
@@ -109,6 +115,7 @@ entities:
 
   vendor:
     table: vendors
+    description: transport vendors/cab suppliers, their SLA targets, contract dates, regions, and cost rates
     columns:
       id: id
       org_id: org_id
@@ -123,6 +130,7 @@ entities:
 
   employee:
     table: employees
+    description: employees who use the transport service, their team/line-manager, and home/work locations
     columns:
       id: id
       org_id: org_id
@@ -138,6 +146,7 @@ entities:
 
   route:
     table: routes
+    description: cab routes with origin/destination, region, assigned vendor, scheduled distance, and shift type
     columns:
       id: id
       org_id: org_id
@@ -154,6 +163,7 @@ entities:
 
   team:
     table: teams
+    description: employee teams and their line-manager/region groupings
     columns:
       id: id
       org_id: org_id
@@ -164,6 +174,7 @@ entities:
 
   driver:
     table: drivers
+    description: cab drivers, the vendor they belong to, and their licence/contact details
     columns:
       id: id
       org_id: org_id

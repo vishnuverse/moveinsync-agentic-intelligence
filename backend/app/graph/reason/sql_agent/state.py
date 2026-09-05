@@ -46,3 +46,11 @@ class SQLAgentState(TypedDict):
     success: bool
     done: bool
     last_step_ok: bool
+    # Set by generate_query when the model judges the question unanswerable
+    # from the contract's business entities (it emits an OUT_OF_SCOPE line
+    # instead of SQL). Routes the subgraph straight to the `decline` terminal
+    # node, bypassing check/run/answer. total=False semantics: absent == not
+    # out of scope (SQLAgentState is a plain TypedDict, so callers read it via
+    # state.get("out_of_scope")).
+    out_of_scope: bool
+    out_of_scope_reason: str

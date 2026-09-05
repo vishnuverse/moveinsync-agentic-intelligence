@@ -1,0 +1,173 @@
+/* Simulated-send caption -- sets the honest framing before either section. */
+.outbox-sim-caption {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-muted);
+  border: 1px dashed var(--color-border-soft);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+}
+
+.outbox-section {
+  margin-top: var(--space-6);
+}
+
+.outbox-section-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-3);
+}
+
+.outbox-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-neutral-bg);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.outbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.outbox-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.outbox-card:hover {
+  border-color: var(--color-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.outbox-card-main {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.outbox-card-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.outbox-card-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-heading);
+  margin-bottom: 2px;
+}
+
+.outbox-card-meta {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.outbox-card-time {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--color-gray);
+  white-space: nowrap;
+}
+
+.outbox-comm-body {
+  font-size: var(--text-md);
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+/* Severity chip -- icon + label, never color alone (matches LiveEventFeed). */
+.outbox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.outbox-status {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: var(--color-neutral-bg);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+}
+
+.outbox-status-sent {
+  color: var(--color-good);
+  background: var(--color-good-bg);
+}
+
+.outbox-sent-hint {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.outbox-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* The shared .btn is 44px tall for touch targets; the Outbox rows are dense,
+   so trim the row actions a little while staying comfortably tappable. */
+.outbox-btn {
+  min-height: 36px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.outbox-flash {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-good);
+  white-space: nowrap;
+  animation: outbox-flash-in 0.15s ease-out;
+}
+
+@keyframes outbox-flash-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outbox-flash {
+    animation: none;
+  }
+}

@@ -34,6 +34,8 @@ from typing import Any, Optional
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
+from app.contracts import get_contract
+
 from .db import get_engine, mark_notification_status, upsert_notification
 from .redis_publish import notification_channel, publish_event
 from .state import ActState
@@ -109,7 +111,7 @@ def notification_dispatch(state: ActState, config: Optional[RunnableConfig] = No
     graph pause and re-confirms/updates the same row on resume.
     """
     decision = state.get("decision", {})
-    org_id = state.get("org_id", "moveinsync-demo")
+    org_id = state.get("org_id") or get_contract().default_org_id
     persona = state.get("persona") or decision.get("target_persona") or "transport_manager"
     scope = state.get("scope", "global")
     thread_id = _resolve_thread_id(state, config)
@@ -165,7 +167,7 @@ def interrupt_gate(state: ActState, config: Optional[RunnableConfig] = None) -> 
     """
     decision = state.get("decision", {})
     action_type = state.get("action_type", "notification")
-    org_id = state.get("org_id", "moveinsync-demo")
+    org_id = state.get("org_id") or get_contract().default_org_id
     persona = state.get("persona") or decision.get("target_persona") or "transport_manager"
     scope = state.get("scope", "global")
     thread_id = _resolve_thread_id(state, config)

@@ -196,8 +196,56 @@ export interface VendorScorecardData {
   vendors: VendorScorecardEntry[];
 }
 
+// --- "Simulate live day" demo (SP-A): POST /api/demo/replay injects real
+// re-timestamped rows and runs the pipeline inline so the WS feed lights up.
+export type DemoScenario =
+  | "delay_spike"
+  | "escort_violation"
+  | "billing_discrepancy"
+  | "emissions_over_target";
+
+export interface ReplayRequest {
+  scenario: DemoScenario;
+  count?: number;
+  org_id?: string;
+}
+
+export interface ReplayResponse {
+  scenario: string;
+  org_id: string;
+  injected_trip_ids: number[];
+  new_trip_ids: number[];
+  pipeline_summary: Array<Record<string, unknown>>;
+}
+
+// A single frame received over the `/api/ws/{persona}` WebSocket. Mirrors the
+// payload shapes app/graph/act/nodes.py publishes to `notifications:{persona}`
+// (kinds: notification | needs_intervention | dispatched | rejected), plus the
+// `published_at` stamp redis_publish.py adds. All fields but `kind` are
+// optional because the four kinds carry different subsets.
+export type LiveEventKind =
+  | "notification"
+  | "needs_intervention"
+  | "dispatched"
+  | "rejected";
+
+export interface LiveEvent {
+  kind: LiveEventKind;
+  notification_id?: string | number;
+  status?: string;
+  severity?: NotificationSeverity;
+  title?: string;
+  persona?: PersonaId | string;
+  thread_id?: string;
+  action_type?: string;
+  summary?: string | null;
+  recommendation?: string | null;
+  published_at?: string;
+}
+
 export interface ApiClient {
   getRoles(): Promise<Role[]>;
+  replayDemo(body: ReplayRequest): Promise<ReplayResponse>;
   getDashboard(persona: PersonaId): Promise<MetricCardData[]>;
   getNotifications(persona: PersonaId): Promise<NotificationItem[]>;
   resumeNotification(

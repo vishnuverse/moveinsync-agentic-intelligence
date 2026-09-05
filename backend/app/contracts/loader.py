@@ -41,6 +41,11 @@ class EntityContract:
     name: str
     table: str
     _columns: Mapping[str, str] = field(repr=False)
+    # Optional human-readable business description (data_contract.yaml's
+    # `description:` per entity). Used to phrase the Q&A scope boundary in
+    # business terms (see the SQL agent's scope_context); falls back to the
+    # entity name when absent, so it is purely additive.
+    description: str | None = None
 
     def column(self, logical_name: str) -> str:
         try:
@@ -94,10 +99,12 @@ def _parse(raw: dict) -> Contract:
         columns = entity_def.get("columns") or {}
         if not isinstance(columns, dict):
             raise ContractError(f"entity '{entity_name}' has a non-mapping 'columns' value")
+        description = entity_def.get("description")
         entities[entity_name] = EntityContract(
             name=entity_name,
             table=entity_def["table"],
             _columns=dict(columns),
+            description=str(description) if description is not None else None,
         )
 
     return Contract(

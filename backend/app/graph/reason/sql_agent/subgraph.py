@@ -146,11 +146,21 @@ def build_sql_agent_subgraph(
     graph.add_node("run_query", nodes.run_query)
     graph.add_node("synthesize_answer", nodes.synthesize_answer)
     graph.add_node("fail_closed", nodes.fail_closed)
+    graph.add_node("decline", nodes.decline)
 
     graph.set_entry_point("list_tables")
     graph.add_edge("list_tables", "get_schema")
     graph.add_edge("get_schema", "generate_query")
-    graph.add_edge("generate_query", "check_query")
+
+    # An out-of-scope generation (the model emitted an OUT_OF_SCOPE line rather
+    # than SQL) routes straight to the decline terminal node -- bypassing the
+    # SELECT guard, execution, and answer synthesis entirely. Everything else
+    # proceeds to check_query as before.
+    graph.add_conditional_edges(
+        "generate_query",
+        SQLAgentNodes.route_after_generate,
+        {"check": "check_query", "decline": "decline"},
+    )
 
     graph.add_conditional_edges(
         "check_query",
@@ -165,6 +175,7 @@ def build_sql_agent_subgraph(
 
     graph.add_edge("synthesize_answer", END)
     graph.add_edge("fail_closed", END)
+    graph.add_edge("decline", END)
 
     return graph.compile()
 
@@ -184,6 +195,8 @@ def _initial_state(question: str, org_id: str) -> SQLAgentState:
         success=False,
         done=False,
         last_step_ok=False,
+        out_of_scope=False,
+        out_of_scope_reason="",
     )
 
 

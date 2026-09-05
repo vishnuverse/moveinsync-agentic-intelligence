@@ -135,6 +135,15 @@ def _signal_from_dict(raw: dict[str, Any] | None) -> Signal | None:
     )
 
 
+def _route_after_reason(state: TopState) -> str:
+    """Conditional edge after `reason`: a chat Q&A turn sets `skip_act=True`
+    (supervisor.run_chat_turn) so the graph ends right after reason -- no act
+    node runs, so no agent_notifications row is written and interrupt_gate can
+    never fire. Signal-driven (run_pipeline) and report runs leave skip_act
+    unset and fall through to the act subgraph unchanged."""
+    return "end" if state.get("skip_act") else "act"
+
+
 def reason_node(state: TopState) -> dict:
     result = run_reason(
         signal=_signal_from_dict(state.get("signal")),
@@ -174,7 +183,9 @@ def _cached_top_graph(checkpointer: BaseCheckpointSaver):
     graph.add_node("act", act_subgraph)
 
     graph.add_edge(START, "reason")
-    graph.add_edge("reason", "bridge_to_act")
+    graph.add_conditional_edges(
+        "reason", _route_after_reason, {"act": "bridge_to_act", "end": END}
+    )
     graph.add_edge("bridge_to_act", "act")
     graph.add_edge("act", END)
 

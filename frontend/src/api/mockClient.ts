@@ -30,6 +30,8 @@ import type {
   NotificationItem,
   PersonaId,
   PieChartData,
+  ReplayRequest,
+  ReplayResponse,
   ReportMeta,
   ResumeDecisionRequest,
   ResumeDecisionResponse,
@@ -183,6 +185,20 @@ export const mockClient: ApiClient = {
   async getRoles(): Promise<Role[]> {
     await delay();
     return ROLES;
+  },
+
+  // Harmless stub: the live-day replay needs the real backend + a WS feed to
+  // do anything meaningful, so in mock mode we just echo an empty summary
+  // (the LiveEventFeed panel is itself inert in mock mode -- see liveEvents.ts).
+  async replayDemo(body: ReplayRequest): Promise<ReplayResponse> {
+    await delay(300, 700);
+    return {
+      scenario: body.scenario,
+      org_id: body.org_id ?? "mock-org",
+      injected_trip_ids: [],
+      new_trip_ids: [],
+      pipeline_summary: [],
+    };
   },
 
   async getDashboard(persona: PersonaId): Promise<MetricCardData[]> {

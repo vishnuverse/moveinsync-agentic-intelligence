@@ -67,6 +67,28 @@ def _extract_sql(text: str) -> str:
     return text.strip().rstrip(";").strip()
 
 
+def _detect_out_of_scope(text: str) -> str | None:
+    """Return the short reason if the model declared the question out of scope
+    (a line beginning with prompts.OUT_OF_SCOPE_MARKER), else None.
+
+    Scans the first few non-empty lines rather than only the very first char:
+    a non-frontier model may prepend a stray blank line or a "Reasoning:"
+    false-start before the marker. To avoid a false positive on a legitimate
+    query that merely mentions the phrase in prose, only lines that *start*
+    with the marker (after stripping) count, and only within the opening lines
+    before any ```sql fence."""
+    for raw_line in text.strip().splitlines()[:5]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.upper().startswith(prompts.OUT_OF_SCOPE_MARKER):
+            reason = line[len(prompts.OUT_OF_SCOPE_MARKER):].strip()
+            return reason or "the question is outside this database's scope"
+        if line.startswith("```"):
+            break
+    return None
+
+
 def _format_rows_preview(rows: list[dict[str, Any]], *, limit: int = 20) -> str:
     if not rows:
         return "(no rows returned)"
@@ -121,7 +143,9 @@ class SQLAgentNodes:
 
     def generate_query(self, state: SQLAgentState) -> dict[str, Any]:
         system = prompts.SYSTEM_PROMPT.format(
-            org_id=self.org_id, schema_context=state["schema_context"]
+            org_id=self.org_id,
+            schema_context=state["schema_context"],
+            scope_context=prompts.build_scope_context(),
         )
         messages = [SystemMessage(content=system)]
 
@@ -141,6 +165,19 @@ class SQLAgentNodes:
         response = self._generate_llm.invoke(messages)
         content = response.content if isinstance(response.content, str) else str(response.content)
         was_truncated = response.response_metadata.get("finish_reason") == "length"
+
+        # Scope guard (reuses this same generation, no extra LLM round-trip):
+        # if the model judged the question unanswerable from the contract's
+        # business entities, it emits an OUT_OF_SCOPE line instead of SQL.
+        # Detect it here and short-circuit to the decline node. Only honored on
+        # a non-truncated response (a truncated one could coincidentally start
+        # with the marker mid-thought) and on the first attempt (an out-of-scope
+        # verdict has nothing to retry).
+        if not was_truncated and not errors:
+            reason = _detect_out_of_scope(content)
+            if reason is not None:
+                return {"out_of_scope": True, "out_of_scope_reason": reason}
+
         if was_truncated:
             # A "length" finish_reason means the API cut the response off
             # mid-stream -- any SQL text extracted from it (fenced or via the
@@ -154,6 +191,32 @@ class SQLAgentNodes:
         return {
             "generated_sql": sql,
             "messages": [HumanMessage(content=state["question"])] if not errors else [],
+        }
+
+    @staticmethod
+    def route_after_generate(state: SQLAgentState) -> str:
+        """Conditional-edge router after generate_query: an out-of-scope
+        verdict goes straight to the decline terminal node (bypassing
+        check/run/answer), everything else proceeds to the SELECT guard.
+        Mirrors the route_after_check/fail_closed shape."""
+        return "decline" if state.get("out_of_scope") else "check"
+
+    # -- decline (out-of-scope terminal) ---------------------------------
+
+    def decline(self, state: SQLAgentState) -> dict[str, Any]:
+        """Terminal node for a question the model judged unanswerable from the
+        contract's business entities. Returns a graceful, figure-free answer
+        (no SQL was run, so nothing to summarize) and marks the run done. This
+        is a *successful* handling of an out-of-scope ask, not a pipeline
+        failure -- success=True, generated_sql stays empty."""
+        reason = state.get("out_of_scope_reason") or "the question is outside this database's scope"
+        message = prompts.OUT_OF_SCOPE_ANSWER.format(reason=reason)
+        return {
+            "final_answer": message,
+            "generated_sql": "",
+            "success": True,
+            "done": True,
+            "messages": [AIMessage(content=message)],
         }
 
     # -- check_query -----------------------------------------------------
