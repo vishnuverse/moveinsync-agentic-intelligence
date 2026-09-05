@@ -77,15 +77,38 @@ elif [ -n "${DATA_DIR:-}" ] && [ -f "${DATA_DIR}/emp_Data.csv" ]; then
     echo "seed: real data found at $DATA_DIR, running real-data ingestion"
     python db/real_data/ingest.py
 
-    echo "seed: applying escort-compliance/ack-time migration (post-ingest, mis.* was just rebuilt)"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/001_add_escort_and_ack_time.sql
-
     echo "seed: applying mis.* NOTIFY triggers (post-ingest, mis.* was just rebuilt)"
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/real_data/triggers.sql
+    # (mis.* column migrations 001/006 are applied by the generic migration
+    # runner below -- which runs on every boot, so existing volumes that just
+    # pulled newer code get them too, not only a fresh post-ingest boot.)
 else
     echo "seed: no real data at DATA_DIR=${DATA_DIR:-<unset>} -- skipping real-data ingestion." \
          "backend/config/data_contract.yaml points at mis.* (now empty) -- drop the dataset CSVs into data/" \
          "and re-run 'docker compose up' to populate it (this project runs on the real dataset only)."
 fi
+
+# ---------------------------------------------------------------------------
+# Schema migrations -- applied idempotently on EVERY boot (in filename order),
+# so an existing volume that just pulled newer code picks up new columns/
+# indexes WITHOUT a reseed or `down -v`. This is the key guarantee for anyone
+# who "pulls the data": every db/migrations/*.sql is additive and
+# IF NOT EXISTS-guarded, so re-applying is a no-op. A migration that targets
+# the real-data `mis.*` schema is skipped until mis.* actually exists (a fresh
+# clone with no CSVs never creates it, and a bare `ALTER TABLE mis.foo` would
+# parse-fail there under `set -e`); detected by whether a NON-comment line of
+# the file references `mis.` (so a mere comment mention never mis-classifies a
+# public-table migration).
+# ---------------------------------------------------------------------------
+MIS_PRESENT=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('mis.trip') IS NOT NULL")
+for mig in db/migrations/*.sql; do
+    [ -f "$mig" ] || continue
+    if grep -vE '^[[:space:]]*--' "$mig" | grep -qiE 'mis\.' && [ "$MIS_PRESENT" != "t" ]; then
+        echo "seed: skipping migration $(basename "$mig") -- targets mis.*, not present yet"
+        continue
+    fi
+    echo "seed: applying migration $(basename "$mig")"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
+done
 
 echo "seed: done"
