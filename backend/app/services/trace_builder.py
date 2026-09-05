@@ -55,6 +55,28 @@ def _original_notification_row(notification_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+def _escalated_notification_row(thread_id: str) -> dict[str, Any] | None:
+    """The promoted row itself, looked up by its synthetic thread_id.
+
+    Used only as a last resort, when the ORIGINAL notification an escalation
+    points at can no longer be resolved into a trace -- see build_trace.
+    """
+    contract = get_contract().entity("notification")
+    table, c = contract.table, contract.column
+    engine = get_engine()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                f"SELECT {c('persona')} AS persona, {c('message')} AS message, "
+                f"{c('created_at')} AS created_at FROM {table} "
+                f"WHERE {c('thread_id')} = :thread_id "
+                f"ORDER BY {c('id')} DESC LIMIT 1"
+            ),
+            {"thread_id": thread_id},
+        ).mappings().first()
+    return dict(row) if row is not None else None
+
+
 def _ts(snapshot: Any) -> str:
     created = getattr(snapshot, "created_at", None)
     if isinstance(created, str) and created:
@@ -197,6 +219,32 @@ def build_trace(thread_id: str) -> list[dict[str, Any]]:
                         }
                     )
                     return original_steps
+
+            # The original is unresolvable -- deleted, or its own checkpoint
+            # history has been trimmed. The promoted row is still sitting in
+            # somebody's inbox, so 404 ("no trace found") is the one answer
+            # that must never come back for it. Degrade to what the escalated
+            # row itself can honestly account for: that it was promoted here,
+            # by whom it went unacknowledged, and when.
+            escalated = _escalated_notification_row(thread_id)
+            if escalated:
+                detail = (escalated["message"] or "").strip()
+                if not detail:
+                    detail = f"Escalated to {escalated['persona']} for visibility."
+                created_at = escalated["created_at"]
+                return [
+                    {
+                        "step": "escalation",
+                        "label": "Escalated",
+                        "detail": (
+                            f"{detail} The original notification's own reasoning trace is no "
+                            "longer available, so only the escalation itself is shown here."
+                        ),
+                        "timestamp": (
+                            created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
+                        ),
+                    }
+                ]
         return []
 
     snapshots.reverse()  # oldest -> newest
