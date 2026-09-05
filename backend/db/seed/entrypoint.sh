@@ -61,7 +61,16 @@ fi
 # re-run to populate). Gated on `mis.trip` (ingest.py's fact table) already
 # having rows, independent of the reference-seed gate above, so this stage
 # alone re-runs if CSVs show up in a later `docker compose up`.
-REAL_DATA_INGESTED=$(psql "$DATABASE_URL" -tAc "SELECT CASE WHEN to_regclass('mis.trip') IS NULL THEN false ELSE EXISTS (SELECT 1 FROM mis.trip) END")
+# Two-step check: `mis.trip` may not exist yet on a fresh volume, and Postgres
+# resolves table references at PARSE time -- so a single query that names
+# `mis.trip` errors out ("relation mis.trip does not exist") before any CASE
+# can guard it, which under `set -e` aborts the whole seed before ingest runs.
+# Check existence first (to_regclass never parse-fails), then non-emptiness.
+if [ "$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('mis.trip') IS NOT NULL")" = "t" ]; then
+    REAL_DATA_INGESTED=$(psql "$DATABASE_URL" -tAc "SELECT EXISTS (SELECT 1 FROM mis.trip)")
+else
+    REAL_DATA_INGESTED="f"
+fi
 if [ "$REAL_DATA_INGESTED" = "t" ]; then
     echo "seed: real data already ingested (mis.trip is non-empty), skipping ingest.py"
 elif [ -n "${DATA_DIR:-}" ] && [ -f "${DATA_DIR}/emp_Data.csv" ]; then
