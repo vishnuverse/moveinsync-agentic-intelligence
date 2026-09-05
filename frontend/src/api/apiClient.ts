@@ -12,6 +12,8 @@ import type {
   CostOptimizationResponse,
   DataCoverage,
   DateRange,
+  HotspotTimelineResponse,
+  SignalTimelineResponse,
   MarkFalsePositiveRequest,
   MetricCardData,
   NotificationItem,
@@ -42,9 +44,24 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 // day-count.
 function rangeQuery(param: "days" | "months", value: number | undefined, range?: DateRange): string {
   if (range?.since && range?.until) {
-    return `?since=${range.since}&until=${range.until}`;
+    // Every window-aggregation endpoint filters `date > since AND date <=
+    // until` (exclusive lower bound -- deliberate, so a "previous period"
+    // comparison window never double-counts the boundary day against the
+    // current one). That means a single-day selection (since === until,
+    // e.g. clicking one day on the hotspot timeline) is mathematically
+    // empty -- shift `since` back one day here, at the call boundary only,
+    // so the picked day's own data still shows; `range` itself (used for
+    // the date inputs' displayed value) is untouched.
+    const since = range.since === range.until ? isoDayBefore(range.since) : range.since;
+    return `?since=${since}&until=${range.until}`;
   }
   return value ? `?${param}=${value}` : "";
+}
+
+function isoDayBefore(isoDate: string): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -197,6 +214,16 @@ export const realClient: ApiClient = {
 
   getVendorScorecard(days?: number, range?: DateRange): Promise<VendorScorecardData> {
     return request<VendorScorecardData>(`/charts/vendor-scorecard${rangeQuery("days", days, range)}`);
+  },
+
+  getHotspotTimeline(days?: number, range?: DateRange): Promise<HotspotTimelineResponse> {
+    return request<HotspotTimelineResponse>(`/charts/hotspot-timeline${rangeQuery("days", days, range)}`);
+  },
+
+  getSignalTimeline(persona: PersonaId, days?: number, range?: DateRange): Promise<SignalTimelineResponse> {
+    const query = rangeQuery("days", days, range);
+    const sep = query ? "&" : "?";
+    return request<SignalTimelineResponse>(`/charts/signal-timeline${query}${sep}persona=${persona}`);
   },
 
   getSignalGateFunnel(days?: number): Promise<ChartSeriesData> {

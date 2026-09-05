@@ -33,6 +33,10 @@ from app.services.date_window import dense_anchor_date
 # detectors can never disagree again.
 DEFAULT_DELAY_BREACH_MINUTES = 15.0
 NODELAY_LABEL = "NODELAY"
+# Mirrors sense/nodes.py's own constant of the same name/value (the
+# fallback used only when sustainability_targets has no row for this org --
+# both modules read the same real target when one exists).
+DEFAULT_ICE_BASELINE_GCO2_PER_PAX_KM = 82.0
 
 
 def _resolve_delay_breach_minutes(engine: Engine, org_id: str) -> float:
@@ -363,12 +367,15 @@ def billing_discrepancy(
     since: date | None = None,
     until: date | None = None,
 ) -> dict[str, Any]:
-    """PRD F2: billed distance (bill_data.total_trip_km, contract: cost.distance_km)
-    vs. actual GPS distance (ride_data_trip.traveled_km, contract:
-    trip.traveled_km), monetised at the rate actually billed
-    (cost.cost_per_km). Only the overbilled direction (billed > traveled)
-    counts as recoverable leakage, matching the PRD's "recover 8-12% of
-    spend" framing -- underbilling isn't a dispute-log item.
+    """PRD F2 billing-slab leakage, same basis as detect_billing_discrepancy_signal
+    (sense/nodes.py): a trip billed under a pricier slab than its ACTUAL
+    traveled_km (trip.traveled_km) warrants. The raw billed-distance column
+    (cost.distance_km / bill_data.total_trip_km) is empty for ~all real rows,
+    so a distance-difference metric is structurally zero -- the real leakage
+    is slab-tier mispricing. Overbilling per trip = trip_cost minus the
+    "calculated slab cost" (avg trip_cost of correctly-slabbed trips of that
+    length), overbilled direction only, matching the PRD's "recover 8-12% of
+    spend" framing.
 
     Broken down per-vendor (top `top_n` by total discrepancy, rest bucketed
     as "Other") rather than a single aggregate line -- the PRD's own framing
@@ -387,25 +394,73 @@ def billing_discrepancy(
             if anchor is None:
                 return {"categories": [], "series": [{"name": "Billing Discrepancy (₹)", "data": []}]}
         window_since = since if since is not None else anchor - timedelta(days=months * 31)
+        # Slab-tier leakage (PRD F2), mirroring detect_billing_discrepancy_signal
+        # in sense/nodes.py: the raw billed-distance column (cost.distance_km /
+        # bill_data.total_trip_km) is empty (<=0.1) for ~all real rows, so a
+        # "billed_km - gps_km" metric is structurally 0. Real overbilling is a
+        # trip billed under a pricier slab than its ACTUAL traveled_km warrants.
+        # Per-org slab->distance bands are derived empirically (median traveled_km
+        # per slab, boundary at the midpoint of adjacent medians); "calculated
+        # slab cost" is the avg trip_cost of correctly-slabbed trips of that
+        # length; overbilling = trip_cost - calculated_slab_cost, overbilled
+        # direction only, aggregated per month per vendor.
         rows = conn.execute(
             text(f"""
-                SELECT date_trunc('month', c.{cost.column('cost_date')})::date AS m,
-                       v.{vendor.column('name')} AS vendor_name,
-                       SUM(GREATEST(c.{cost.column('distance_km')} - t.{trip.column('traveled_km')}, 0)
-                           * c.{cost.column('cost_per_km')}) AS discrepancy
-                FROM {cost.table} c
-                JOIN {trip.table} t ON t.{trip.column('id')} = c.{cost.column('trip_id')}
-                LEFT JOIN {vendor.table} v ON v.{vendor.column('id')} = c.{cost.column('vendor_id')}
-                WHERE c.{cost.column('org_id')} = :org_id
-                  AND c.{cost.column('cost_date')} > :since
-                  AND c.{cost.column('cost_date')} <= :until
-                  AND c.{cost.column('distance_km')} IS NOT NULL
-                  AND t.{trip.column('traveled_km')} IS NOT NULL
-                  AND c.{cost.column('cost_per_km')} IS NOT NULL
-                GROUP BY m, v.{vendor.column('name')}
-                ORDER BY m
+                WITH billed AS (
+                    SELECT c.{cost.column('id')} AS cost_id,
+                           v.{vendor.column('name')} AS vendor_name,
+                           c.{cost.column('slab_name')} AS slab_name,
+                           c.{cost.column('amount')} AS trip_cost,
+                           t.{trip.column('traveled_km')} AS traveled_km,
+                           date_trunc('month', c.{cost.column('cost_date')})::date AS m
+                    FROM {cost.table} c
+                    JOIN {trip.table} t ON t.{trip.column('id')} = c.{cost.column('trip_id')}
+                    LEFT JOIN {vendor.table} v ON v.{vendor.column('id')} = c.{cost.column('vendor_id')}
+                    WHERE c.{cost.column('org_id')} = :org_id
+                      AND c.{cost.column('cost_date')} > :since
+                      AND c.{cost.column('cost_date')} <= :until
+                      AND c.{cost.column('slab_name')} IS NOT NULL AND trim(c.{cost.column('slab_name')}) <> ''
+                      AND t.{trip.column('traveled_km')} IS NOT NULL
+                      AND c.{cost.column('amount')} IS NOT NULL
+                ),
+                slab_bands AS (
+                    SELECT slab_name, percentile_cont(0.5) WITHIN GROUP (ORDER BY traveled_km) AS median_km
+                    FROM billed GROUP BY slab_name HAVING COUNT(*) >= :min_slab_sample
+                ),
+                slab_bounds AS (
+                    SELECT slab_name, median_km,
+                           LAG(median_km) OVER (ORDER BY median_km) AS prev_median,
+                           LEAD(median_km) OVER (ORDER BY median_km) AS next_median
+                    FROM slab_bands
+                ),
+                slab_ranges AS (
+                    SELECT slab_name,
+                           COALESCE((prev_median + median_km) / 2.0, 0.0) AS lower_km,
+                           COALESCE((median_km + next_median) / 2.0, median_km * 2 + 1000) AS upper_km
+                    FROM slab_bounds
+                ),
+                correct_slab AS (
+                    SELECT b.cost_id, r.slab_name AS correct_slab_name
+                    FROM billed b JOIN slab_ranges r
+                      ON b.traveled_km >= r.lower_km AND b.traveled_km < r.upper_km
+                ),
+                slab_expected_cost AS (
+                    SELECT b.slab_name, AVG(b.trip_cost) AS avg_cost_for_slab
+                    FROM billed b JOIN slab_ranges r ON r.slab_name = b.slab_name
+                    WHERE b.traveled_km >= r.lower_km AND b.traveled_km < r.upper_km
+                    GROUP BY b.slab_name HAVING COUNT(*) >= :min_slab_sample
+                )
+                SELECT b.m AS m,
+                       b.vendor_name AS vendor_name,
+                       SUM(GREATEST(b.trip_cost - sec.avg_cost_for_slab, 0)) AS discrepancy
+                FROM billed b
+                JOIN correct_slab cs ON cs.cost_id = b.cost_id
+                JOIN slab_expected_cost sec ON sec.slab_name = cs.correct_slab_name
+                WHERE cs.correct_slab_name <> b.slab_name
+                GROUP BY b.m, b.vendor_name
+                ORDER BY b.m
             """),
-            {"org_id": org_id, "since": window_since, "until": anchor},
+            {"org_id": org_id, "since": window_since, "until": anchor, "min_slab_sample": 30},
         ).mappings().all()
 
     months_list: list[date] = sorted({row["m"] for row in rows})
@@ -576,8 +631,9 @@ def vendor_scorecard(
                        v.{vendor.column('cost_per_km')} AS cost_per_km,
                        COUNT(i.{incident.column('id')}) AS incident_count
                 FROM {vendor.table} v
-                LEFT JOIN {route.table} r ON r.{route.column('vendor_id')} = v.{vendor.column('id')}
-                LEFT JOIN {incident.table} i ON i.{incident.column('route_id')} = r.{route.column('id')}
+                LEFT JOIN {trip.table} t ON t.{trip.column('vendor_id')} = v.{vendor.column('id')}
+                    AND t.{trip.column('org_id')} = :org_id
+                LEFT JOIN {incident.table} i ON i.{incident.column('trip_id')} = t.{trip.column('id')}
                     AND i.{incident.column('org_id')} = :org_id
                     AND i.{incident.column('occurred_at')} > :since
                     AND i.{incident.column('occurred_at')} <= :until_bound
@@ -594,21 +650,20 @@ def vendor_scorecard(
         if vendor_ids and anchor:
             spark_rows = conn.execute(
                 text(f"""
-                    SELECT r.{route.column('vendor_id')} AS vendor_id,
+                    SELECT t.{trip.column('vendor_id')} AS vendor_id,
                            date_trunc('week', t.{trip.column('trip_date')})::date AS wk,
                            COUNT(*) AS total,
                            COUNT(*) FILTER (WHERE {_delay_expr('t', trip)} <= :breach) AS ontime
                     FROM {trip.table} t
-                    JOIN {route.table} r ON r.{route.column('id')} = t.{trip.column('route_id')}
                     WHERE t.{trip.column('org_id')} = :org_id
                       AND t.{trip.column('status')} = 'completed'
                       AND t.{trip.column('actual_time')} IS NOT NULL
                       AND t.{trip.column('scheduled_time')} IS NOT NULL
                       AND t.{trip.column('trip_date')} > :since
                       AND t.{trip.column('trip_date')} <= :until_bound
-                      AND r.{route.column('vendor_id')} = ANY(:vendor_ids)
-                    GROUP BY r.{route.column('vendor_id')}, wk
-                    ORDER BY r.{route.column('vendor_id')}, wk
+                      AND t.{trip.column('vendor_id')} = ANY(:vendor_ids)
+                    GROUP BY t.{trip.column('vendor_id')}, wk
+                    ORDER BY t.{trip.column('vendor_id')}, wk
                 """),
                 {
                     "org_id": org_id,
@@ -633,20 +688,19 @@ def vendor_scorecard(
             prev_since = since - timedelta(days=days)
             windowed_rows = conn.execute(
                 text(f"""
-                    SELECT r.{route.column('vendor_id')} AS vendor_id,
+                    SELECT t.{trip.column('vendor_id')} AS vendor_id,
                            (t.{trip.column('trip_date')} > :since) AS is_current,
                            COUNT(*) AS total,
                            COUNT(*) FILTER (WHERE {_delay_expr('t', trip)} <= :breach) AS ontime
                     FROM {trip.table} t
-                    JOIN {route.table} r ON r.{route.column('id')} = t.{trip.column('route_id')}
                     WHERE t.{trip.column('org_id')} = :org_id
                       AND t.{trip.column('status')} = 'completed'
                       AND t.{trip.column('actual_time')} IS NOT NULL
                       AND t.{trip.column('scheduled_time')} IS NOT NULL
                       AND t.{trip.column('trip_date')} > :prev_since
                       AND t.{trip.column('trip_date')} <= :until_bound
-                      AND r.{route.column('vendor_id')} = ANY(:vendor_ids)
-                    GROUP BY r.{route.column('vendor_id')}, is_current
+                      AND t.{trip.column('vendor_id')} = ANY(:vendor_ids)
+                    GROUP BY t.{trip.column('vendor_id')}, is_current
                 """),
                 {
                     "org_id": org_id,
@@ -676,6 +730,275 @@ def vendor_scorecard(
         for row in main_rows
     ]
     return {"vendors": vendors}
+
+
+def hotspot_timeline(
+    engine: Engine, org_id: str, days: int = 90, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
+    """Daily count of Major Risk Hotspot events (plan SP-B §B0: unescorted
+    late-night female trips -- both drop and pickup legs -- plus incidents
+    at critical/high severity), for the dashboard's colored hotspot timeline
+    (click a day/range to set the date-range picker to it).
+
+    Deliberately grounded in each event's own real date
+    (mis.trip.trip_date / mis.incident.occurred_at), not
+    agent_notifications.created_at -- the latter only reflects when the demo
+    pipeline happened to process an already-months-old trip, not when the
+    underlying safety event actually occurred, so it would draw a timeline
+    that's almost entirely about "today" instead of the real historical
+    pattern a viewer is trying to explore. Same join shape
+    detect_escort_compliance_signal uses (trip -> commute -> employee),
+    just grouped by day across a bounded window instead of capped at
+    `violation_limit` and scanning unbounded history."""
+    contract = get_contract()
+    trip = contract.entity("trip")
+    commute = contract.entity("commute")
+    employee = contract.entity("employee")
+    incident = contract.entity("incident")
+
+    with engine.begin() as conn:
+        if until is not None:
+            anchor = until
+        else:
+            anchor = dense_anchor_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
+            if anchor is None:
+                return {"days": []}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+
+        escort_rows = conn.execute(
+            text(f"""
+                SELECT t.{trip.column('trip_date')} AS d, COUNT(*) AS n
+                FROM {trip.table} t
+                JOIN {commute.table} c ON c.{commute.column('trip_id')} = t.{trip.column('id')}
+                JOIN {employee.table} e ON e.{employee.column('id')} = c.{commute.column('employee_id')}
+                WHERE t.{trip.column('org_id')} = :org_id
+                  AND e.{employee.column('gender')} = 'FEMALE'
+                  AND t.{trip.column('actual_escort')} = FALSE
+                  AND t.{trip.column('actual_departure')} IS NOT NULL
+                  AND (EXTRACT(HOUR FROM t.{trip.column('actual_departure')}) >= 21
+                       OR EXTRACT(HOUR FROM t.{trip.column('actual_departure')}) < 6)
+                  AND t.{trip.column('trip_date')} > :since
+                  AND t.{trip.column('trip_date')} <= :until
+                GROUP BY d
+            """),
+            {"org_id": org_id, "since": window_since, "until": anchor},
+        ).mappings().all()
+
+        incident_rows = conn.execute(
+            text(f"""
+                SELECT i.{incident.column('occurred_at')}::date AS d,
+                       i.{incident.column('severity')} AS severity,
+                       COUNT(*) AS n
+                FROM {incident.table} i
+                WHERE i.{incident.column('org_id')} = :org_id
+                  AND i.{incident.column('occurred_at')}::date > :since
+                  AND i.{incident.column('occurred_at')}::date <= :until
+                  AND i.{incident.column('severity')} IN ('critical', 'high')
+                GROUP BY d, i.{incident.column('severity')}
+            """),
+            {"org_id": org_id, "since": window_since, "until": anchor},
+        ).mappings().all()
+
+    by_day: dict[date, dict[str, int]] = {}
+
+    def bump(d: date, key: str, n: int) -> None:
+        row = by_day.setdefault(d, {"escort_violations": 0, "critical_incidents": 0, "high_incidents": 0})
+        row[key] += n
+
+    for row in escort_rows:
+        bump(row["d"], "escort_violations", int(row["n"]))
+    for row in incident_rows:
+        key = "critical_incidents" if row["severity"] == "critical" else "high_incidents"
+        bump(row["d"], key, int(row["n"]))
+
+    days_out = [
+        {
+            "date": d.isoformat(),
+            "escort_violations": counts["escort_violations"],
+            "critical_incidents": counts["critical_incidents"],
+            "high_incidents": counts["high_incidents"],
+        }
+        for d, counts in sorted(by_day.items())
+    ]
+    return {"days": days_out, "window_since": str(window_since), "window_until": str(anchor)}
+
+
+def signal_timeline(
+    engine: Engine, org_id: str, persona: str, days: int = 90, *, since: date | None = None, until: date | None = None
+) -> dict[str, Any]:
+    """Line Manager / Transport Head's own analog of `hotspot_timeline` --
+    same generic shape ({date, primary_count, marker_count}), grounded in
+    each persona's own routed signal types (plan §A's domain-scope table)
+    rather than a fabricated one-size-fits-all metric:
+
+    - line_manager: `primary_count` = total late-attendance marks that day,
+      `marker_count` = 1 on a day where the MAJORITY of that day's lates
+      correlate with a real transport delay (same join/filter
+      detect_attendance_correlation uses) -- "this was a shuttle-caused
+      lateness day," not just a generic busy day.
+    - transport_head: `primary_count` = overbilled INR that day (same
+      formula billing_discrepancy uses, day-grained instead of month-
+      grained), `marker_count` = count of individual trips whose
+      co2_per_passenger_km exceeded the sustainability baseline that day
+      (a real, naturally day-groupable event, distinct from
+      detect_emissions_signal's own route-AVERAGE-over-the-whole-window
+      check, which has no single-day granularity to plot).
+
+    transport_manager is NOT handled here -- it keeps the richer,
+    already-built `hotspot_timeline` (distinct critical/high incident
+    counts, not collapsible into this simpler 2-field shape without losing
+    real information)."""
+    if persona == "line_manager":
+        return _line_manager_timeline(engine, org_id, days, since=since, until=until)
+    if persona == "transport_head":
+        return _transport_head_timeline(engine, org_id, days, since=since, until=until)
+    return {"days": [], "window_since": None, "window_until": None}
+
+
+def _line_manager_timeline(
+    engine: Engine, org_id: str, days: int, *, since: date | None, until: date | None
+) -> dict[str, Any]:
+    contract = get_contract()
+    attendance = contract.entity("attendance")
+    commute = contract.entity("commute")
+    trip = contract.entity("trip")
+    breach_minutes = _resolve_delay_breach_minutes(engine, org_id)
+
+    with engine.begin() as conn:
+        if until is not None:
+            anchor = until
+        else:
+            anchor = dense_anchor_date(
+                conn, attendance.table, attendance.column("work_date"), org_id, attendance.column("org_id")
+            )
+            if anchor is None:
+                return {"days": [], "window_since": None, "window_until": None}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+
+        rows = conn.execute(
+            text(f"""
+                SELECT a.{attendance.column('work_date')} AS d,
+                       COUNT(*) AS late_count,
+                       COUNT(*) FILTER (
+                           WHERE c.{commute.column('mode')} IN ('shuttle', 'cab')
+                             AND t.{trip.column('actual_time')} IS NOT NULL
+                             AND t.{trip.column('scheduled_time')} IS NOT NULL
+                             AND {_delay_expr('t', trip)} > :breach
+                       ) AS transport_caused_count
+                FROM {attendance.table} a
+                LEFT JOIN {commute.table} c ON c.{commute.column('employee_id')} = a.{attendance.column('employee_id')}
+                                             AND c.{commute.column('log_date')} = a.{attendance.column('work_date')}
+                LEFT JOIN {trip.table} t ON t.{trip.column('id')} = c.{commute.column('trip_id')}
+                WHERE a.{attendance.column('org_id')} = :org_id
+                  AND a.{attendance.column('status')} = 'late'
+                  AND a.{attendance.column('work_date')} > :since
+                  AND a.{attendance.column('work_date')} <= :until
+                GROUP BY d
+            """),
+            {"org_id": org_id, "since": window_since, "until": anchor, "breach": breach_minutes},
+        ).mappings().all()
+
+    days_out = []
+    for row in rows:
+        late_count = int(row["late_count"])
+        transport_caused = int(row["transport_caused_count"] or 0)
+        days_out.append(
+            {
+                "date": row["d"].isoformat(),
+                "primary_count": late_count,
+                "marker_count": 1 if late_count and transport_caused / late_count >= 0.5 else 0,
+            }
+        )
+    days_out.sort(key=lambda r: r["date"])
+    return {"days": days_out, "window_since": str(window_since), "window_until": str(anchor)}
+
+
+def _transport_head_timeline(
+    engine: Engine, org_id: str, days: int, *, since: date | None, until: date | None
+) -> dict[str, Any]:
+    """`primary_count` = total daily spend (mis.cost.amount, i.e.
+    total_cost_inr) -- NOT the overbilled-distance formula billing_discrepancy
+    uses, which depends on cost_per_km_inr; verified live that column is
+    populated for only 23 of 70,946 vanta-Aus cost rows (0.03%, vs 99%+ for
+    every other org -- a real, pre-existing data-ingestion gap, not
+    something to route around silently: flagged separately for a fix).
+    total_cost_inr has no such gap, so this stays meaningful for every org.
+
+    `marker_count` = 1 on a day whose AVERAGE co2_per_passenger_km across
+    all trips exceeds the sustainability baseline -- a day-level version of
+    detect_emissions_signal's own "average over baseline" philosophy (that
+    detector checks a route's average over the whole window; this checks a
+    day's average across routes). Deliberately NOT "count of individual
+    over-baseline trips" -- verified live that's ~44% of all trips on a
+    typical day (a below-baseline org-wide average with high per-trip
+    variance from a mixed EV/ICE fleet), so it would mark nearly every day
+    and defeat the point of a marker."""
+    contract = get_contract()
+    cost = contract.entity("cost")
+    emission = contract.entity("emission")
+
+    with engine.begin() as conn:
+        if until is not None:
+            anchor = until
+        else:
+            anchor = dense_anchor_date(conn, cost.table, cost.column("cost_date"), org_id, cost.column("org_id"))
+            if anchor is None:
+                return {"days": [], "window_since": None, "window_until": None}
+        window_since = since if since is not None else anchor - timedelta(days=days)
+
+        cost_rows = conn.execute(
+            text(f"""
+                SELECT c.{cost.column('cost_date')} AS d, SUM(c.{cost.column('amount')}) AS total_inr
+                FROM {cost.table} c
+                WHERE c.{cost.column('org_id')} = :org_id
+                  AND c.{cost.column('cost_date')} > :since
+                  AND c.{cost.column('cost_date')} <= :until
+                GROUP BY d
+            """),
+            {"org_id": org_id, "since": window_since, "until": anchor},
+        ).mappings().all()
+
+        baseline_row = conn.execute(
+            text(
+                "SELECT target_value, threshold_value FROM sustainability_targets "
+                "WHERE org_id = :org_id AND metric_name = 'carbon_gco2_per_passenger_km' "
+                "ORDER BY effective_from DESC LIMIT 1"
+            ),
+            {"org_id": org_id},
+        ).mappings().first()
+        baseline = (
+            float(baseline_row["threshold_value"] or baseline_row["target_value"])
+            if baseline_row is not None
+            else DEFAULT_ICE_BASELINE_GCO2_PER_PAX_KM
+        )
+
+        emission_rows = conn.execute(
+            text(f"""
+                SELECT e.{emission.column('log_date')} AS d, AVG(e.{emission.column('co2_per_passenger_km')}) AS avg_co2
+                FROM {emission.table} e
+                WHERE e.{emission.column('org_id')} = :org_id
+                  AND e.{emission.column('log_date')} > :since
+                  AND e.{emission.column('log_date')} <= :until
+                  AND e.{emission.column('co2_per_passenger_km')} IS NOT NULL
+                GROUP BY d
+            """),
+            {"org_id": org_id, "since": window_since, "until": anchor},
+        ).mappings().all()
+
+    by_day: dict[date, dict[str, int]] = {}
+    for row in cost_rows:
+        by_day.setdefault(row["d"], {"total_inr": 0, "over_baseline": 0})["total_inr"] = round(
+            float(row["total_inr"] or 0.0)
+        )
+    for row in emission_rows:
+        entry = by_day.setdefault(row["d"], {"total_inr": 0, "over_baseline": 0})
+        entry["over_baseline"] = 1 if row["avg_co2"] is not None and float(row["avg_co2"]) > baseline else 0
+
+    days_out = [
+        {"date": d.isoformat(), "primary_count": v["total_inr"], "marker_count": v["over_baseline"]}
+        for d, v in sorted(by_day.items())
+    ]
+    return {"days": days_out, "window_since": str(window_since), "window_until": str(anchor)}
 
 
 def signal_gate_funnel(engine: Engine, org_id: str, days: int = 30) -> dict[str, Any]:

@@ -18,7 +18,7 @@ MetricTrend = Literal["up", "down", "flat"]
 NotificationSeverity = Literal["info", "warning", "critical"]
 NotificationStatus = Literal["open", "acked", "needs-intervention"]
 TraceStepType = Literal[
-    "signal_detected", "gate_decision", "sql_generated", "sql_executed", "context_built", "decision"
+    "signal_detected", "gate_decision", "sql_generated", "sql_executed", "context_built", "decision", "escalation"
 ]
 ActivityTrigger = Literal["schedule", "event"]
 

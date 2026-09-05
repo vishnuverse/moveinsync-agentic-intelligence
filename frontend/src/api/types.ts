@@ -55,7 +55,8 @@ export type TraceStepType =
   | "sql_generated"
   | "sql_executed"
   | "context_built"
-  | "decision";
+  | "decision"
+  | "escalation";
 
 export interface TraceStep {
   step: TraceStepType;
@@ -183,6 +184,41 @@ export interface ChartSeriesData {
 export interface PieSlice {
   name: string;
   y: number;
+}
+
+// GET /api/charts/hotspot-timeline -- one row per real calendar day with
+// Major Risk Hotspot activity (unescorted late-night female trips, critical/
+// high-severity incidents), grounded in each event's own date, not when the
+// demo pipeline happened to process it. Powers the dashboard's colored,
+// click/drag-selectable hotspot timeline.
+export interface HotspotDay {
+  date: string;
+  escort_violations: number;
+  critical_incidents: number;
+  high_incidents: number;
+}
+
+export interface HotspotTimelineResponse {
+  days: HotspotDay[];
+  window_since: string;
+  window_until: string;
+}
+
+// GET /api/charts/signal-timeline?persona=X -- Line Manager/Transport
+// Head's own analog of the hotspot timeline (Transport Manager keeps the
+// richer HotspotDay shape above). Same generic 2-field shape for both
+// personas; what primary/marker actually mean is persona-specific (see
+// backend/app/services/chart_data.py::signal_timeline's docstring).
+export interface TimelineDay {
+  date: string;
+  primary_count: number;
+  marker_count: number;
+}
+
+export interface SignalTimelineResponse {
+  days: TimelineDay[];
+  window_since: string | null;
+  window_until: string | null;
 }
 
 export interface PieSeries {
@@ -403,6 +439,8 @@ export interface ApiClient {
   getBillingDiscrepancy(months?: number, range?: DateRange): Promise<ChartSeriesData>;
   getEmissionsByFuel(days?: number, range?: DateRange): Promise<ChartSeriesData>;
   getVendorScorecard(days?: number, range?: DateRange): Promise<VendorScorecardData>;
+  getHotspotTimeline(days?: number, range?: DateRange): Promise<HotspotTimelineResponse>;
+  getSignalTimeline(persona: PersonaId, days?: number, range?: DateRange): Promise<SignalTimelineResponse>;
   getSignalGateFunnel(days?: number): Promise<ChartSeriesData>;
   getLlmUsage(days?: number): Promise<ChartSeriesData>;
   getRules(): Promise<RulesResponse>;

@@ -29,6 +29,8 @@ import type {
   ChatThreadRenameRequest,
   CostOptimizationResponse,
   DataCoverage,
+  HotspotTimelineResponse,
+  SignalTimelineResponse,
   MarkFalsePositiveRequest,
   MetricCardData,
   NotificationItem,
@@ -499,6 +501,43 @@ export const mockClient: ApiClient = {
   async getVendorScorecard(days = 90): Promise<VendorScorecardData> {
     await delay();
     return vendorScorecardMock(days);
+  },
+
+  async getHotspotTimeline(days = 90): Promise<HotspotTimelineResponse> {
+    await delay();
+    const until = "2026-07-31";
+    const untilDate = new Date(`${until}T00:00:00Z`);
+    const rows = Array.from({ length: days }, (_, i) => {
+      const d = new Date(untilDate);
+      d.setUTCDate(d.getUTCDate() - (days - 1 - i));
+      const weekday = d.getUTCDay();
+      const base = weekday === 0 || weekday === 6 ? 40 : 120;
+      return {
+        date: d.toISOString().slice(0, 10),
+        escort_violations: Math.round(base + Math.random() * 80),
+        critical_incidents: Math.random() < 0.03 ? 1 : 0,
+        high_incidents: Math.random() < 0.05 ? 1 : 0,
+      };
+    });
+    const since = rows[0]?.date ?? until;
+    return { days: rows, window_since: since, window_until: until };
+  },
+
+  async getSignalTimeline(_persona: PersonaId, days = 90): Promise<SignalTimelineResponse> {
+    await delay();
+    const until = "2026-07-31";
+    const untilDate = new Date(`${until}T00:00:00Z`);
+    const rows = Array.from({ length: days }, (_, i) => {
+      const d = new Date(untilDate);
+      d.setUTCDate(d.getUTCDate() - (days - 1 - i));
+      return {
+        date: d.toISOString().slice(0, 10),
+        primary_count: Math.round(50 + Math.random() * 200),
+        marker_count: Math.random() < 0.1 ? 1 : 0,
+      };
+    });
+    const since = rows[0]?.date ?? until;
+    return { days: rows, window_since: since, window_until: until };
   },
 
   async getSignalGateFunnel(): Promise<ChartSeriesData> {

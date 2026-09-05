@@ -143,6 +143,76 @@ _RULE_ONLY_RECOMMENDATION_TEMPLATES: dict[str, str] = {
 }
 
 
+# Mirrors frontend/src/components/ChatPanel.tsx's EXAMPLE_PROMPTS (kept in
+# sync by convention, not code-shared, since one's a UI fixture and the
+# other's a chat-turn reply) -- a "hi"/"what can you do" reply should point
+# at the same kinds of questions the UI's own example chips already suggest.
+_SMALLTALK_EXAMPLES_BY_PERSONA: dict[str, list[str]] = {
+    "transport_manager": [
+        "Which route had the worst on-time performance this week?",
+        "Are there any safety incidents I should know about?",
+        "Which vendor is falling short of their SLA?",
+    ],
+    "line_manager": [
+        "What's my team's no-show rate this month?",
+        "Are shuttle delays affecting my team's attendance?",
+    ],
+    "transport_head": [
+        "Which vendor has the highest billing discrepancy?",
+        "How do our emissions compare to the industry baseline?",
+    ],
+}
+_PERSONA_LABELS = {
+    "transport_manager": "Transport Manager",
+    "line_manager": "Line Manager",
+    "transport_head": "Transport & Facilities Head",
+}
+
+
+def smalltalk_reply(state: ReasonState) -> dict[str, Any]:
+    """Plan: "handle general chats like hi/hello with an intent node" --
+    reached only when app.graph.reason.router.decide_route classified the
+    raw message as greeting/pleasantry/farewell/capability-question, via a
+    fast keyword check with zero LLM cost (see router.py's own docstring for
+    why this is deterministic, not a model call). Produces a real
+    ReasonDecision (same shape every other terminal reason node returns) so
+    the chat endpoint's `decision.summary` fallback picks it up exactly like
+    any other answer -- no special-casing needed downstream.
+
+    Never calls call_sql_agent/call_research_agent/impact_context_builder/
+    root_cause_synthesizer -- there is nothing to look up or reason about
+    for "hi," so this is a true zero-LLM, zero-DB-query path, same spirit as
+    rule_based_decision's no-LLM path for an unambiguous signal."""
+    question = (state.get("question") or "").strip().lower().rstrip("!.?, ")
+    persona = state.get("persona") or "transport_manager"
+    persona_label = _PERSONA_LABELS.get(persona, "transport")
+    examples = _SMALLTALK_EXAMPLES_BY_PERSONA.get(persona, _SMALLTALK_EXAMPLES_BY_PERSONA["transport_manager"])
+
+    if question in ("bye", "goodbye", "see you", "see ya", "later", "take care"):
+        summary = "Goodbye! I'll be here if you need anything on trips, delays, cost, or safety."
+    elif question in ("thanks", "thank you", "thx", "ty", "cheers", "appreciate it"):
+        summary = "You're welcome! Let me know if there's anything else you'd like to look into."
+    elif question in ("ok", "okay", "got it", "sounds good", "cool", "nice", "great", "awesome"):
+        summary = "Got it. I'm here whenever you want to dig into your data."
+    else:
+        example_lines = "\n".join(f"- {ex}" for ex in examples)
+        summary = (
+            f"Hi! I'm the {persona_label} assistant. I can answer questions grounded in your live "
+            f"transport data -- trips, delays, cost, safety, and attendance. Try asking:\n{example_lines}"
+        )
+
+    decision: dict[str, Any] = {
+        "summary": summary,
+        "root_cause": "",
+        "recommendation": "",
+        "confidence": 1.0,
+        "needs_human_signoff": False,
+        "target_persona": persona,
+        "supporting_evidence": [],
+    }
+    return {"decision": decision}
+
+
 def rule_based_decision(state: ReasonState) -> dict[str, Any]:
     """The no-LLM path (plan SP-B §1e): reached only when
     app.graph.reason.gate.evaluate_gate decided `rule_only` for this signal

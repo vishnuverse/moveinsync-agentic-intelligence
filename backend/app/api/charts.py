@@ -89,6 +89,20 @@ def get_vendor_scorecard(
     )
 
 
+@router.get("/hotspot-timeline")
+def get_hotspot_timeline(
+    days: int = 90, since: date | None = Query(default=None), until: date | None = Query(default=None)
+) -> dict:
+    return chart_data.hotspot_timeline(get_engine(), default_org_id(), days=days, since=since, until=until)
+
+
+@router.get("/signal-timeline")
+def get_signal_timeline(
+    persona: str, days: int = 90, since: date | None = Query(default=None), until: date | None = Query(default=None)
+) -> dict:
+    return chart_data.signal_timeline(get_engine(), default_org_id(), persona, days=days, since=since, until=until)
+
+
 @router.get("/signal-gate-funnel", response_model=ChartSeriesData)
 def get_signal_gate_funnel(days: int = 30) -> ChartSeriesData:
     return ChartSeriesData(**chart_data.signal_gate_funnel(get_engine(), default_org_id(), days=days))

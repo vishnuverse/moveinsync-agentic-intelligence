@@ -18,6 +18,12 @@ const STEP_LABELS: Record<TraceStep["step"], string> = {
   sql_executed: "SQL Executed",
   context_built: "Context Attached",
   decision: "Decision",
+  // BUGFIX: an escalated notification's thread_id is synthetic (created
+  // directly by check_escalations, never passed through top_graph.invoke())
+  // -- there's no checkpoint history under it, so its trace is the ORIGINAL
+  // notification's trace with this one extra step appended, explaining the
+  // promotion rather than 404ing on "How was this computed?".
+  escalation: "Escalated",
 };
 
 function formatTime(ts: string): string {

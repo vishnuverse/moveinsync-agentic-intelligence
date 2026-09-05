@@ -25,6 +25,7 @@ kinds), so they're not surfaced here.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,6 +34,25 @@ from sqlalchemy import text
 from app.api.deps import get_top_graph
 from app.contracts import get_contract
 from app.graph.act.db import get_engine
+
+# Matches the synthetic thread_id check_escalations() (supervisor.py) builds
+# for an escalated notification: f"{next_persona}:{scope}:escalated-{id}".
+_ESCALATED_THREAD_RE = re.compile(r"^[^:]+:.+:escalated-(?P<notification_id>\d+)$")
+
+
+def _original_notification_row(notification_id: str) -> dict[str, Any] | None:
+    contract = get_contract().entity("notification")
+    table, c = contract.table, contract.column
+    engine = get_engine()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                f"SELECT {c('thread_id')} AS thread_id, {c('persona')} AS persona, "
+                f"{c('created_at')} AS created_at FROM {table} WHERE {c('id')} = :id"
+            ),
+            {"id": notification_id},
+        ).mappings().first()
+    return dict(row) if row is not None else None
 
 
 def _ts(snapshot: Any) -> str:
@@ -147,6 +167,36 @@ def build_trace(thread_id: str) -> list[dict[str, Any]]:
     config = {"configurable": {"thread_id": thread_id}}
     snapshots = list(top_graph.get_state_history(config))
     if not snapshots:
+        # BUGFIX (found live: an escalated notification's "How was this
+        # computed?" 404'd): check_escalations (supervisor.py) inserts its
+        # promoted agent_notifications row with a synthetic thread_id
+        # directly via SQL -- it never runs top_graph.invoke() under that
+        # thread_id (escalation promotes visibility to a more senior
+        # persona, it doesn't re-reason), so there is genuinely no
+        # checkpoint history to read there. The honest, useful trace is the
+        # ORIGINAL notification's own reasoning (recursed on its real
+        # thread_id) with one extra step appended explaining the promotion,
+        # not a 404 that makes an escalated item look untraceable.
+        match = _ESCALATED_THREAD_RE.match(thread_id)
+        if match:
+            original = _original_notification_row(match.group("notification_id"))
+            if original and original["thread_id"] and original["thread_id"] != thread_id:
+                original_steps = build_trace(original["thread_id"])
+                if original_steps:
+                    created_at = original["created_at"]
+                    original_steps.append(
+                        {
+                            "step": "escalation",
+                            "label": "Escalated",
+                            "detail": (
+                                f"This item went unacknowledged by {original['persona']} past its "
+                                "severity's configured timeout and was escalated here for visibility "
+                                "-- the reasoning above is unchanged from the original."
+                            ),
+                            "timestamp": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+                        }
+                    )
+                    return original_steps
         return []
 
     snapshots.reverse()  # oldest -> newest

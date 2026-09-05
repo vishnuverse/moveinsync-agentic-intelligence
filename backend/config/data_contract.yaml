@@ -34,6 +34,10 @@ entities:
       org_id: org_id
       route_id: route_id
       driver_id: driver_id
+      # Real physical column on mis.trip (the trip's ACTUAL operating vendor).
+      # Needed to attribute per-trip stats (incidents, on-time) to the vendor
+      # that actually ran the trip, not the route's modal vendor.
+      vendor_id: vendor_id
       trip_date: trip_date
       scheduled_departure: scheduled_departure
       scheduled_time: scheduled_arrival

@@ -41,10 +41,51 @@ _RESEARCH_TOPIC_BY_SIGNAL_TYPE = {
 
 _RESEARCH_KEYWORDS = ("carbon", "emission", "co2", "sustainab", "benchmark", "industry", "esg", "footprint")
 
+# Chat-only intent classification -- a fast, zero-LLM keyword check, not
+# another model call: matching this app's own "reduce unnecessary LLM
+# calls" discipline (the SP-B gate), there is no reason to spend a real LLM
+# call classifying "hi" vs. "what was our OTA last week" when a short,
+# well-scoped pattern list does it for free and instantly. Only the WHOLE
+# (trimmed, lowercased) message matching one of these short lists counts --
+# "hi, what was our OTA yesterday" still reaches the SQL agent; a bare "hi"
+# does not. A message that doesn't match any of these falls through to the
+# existing SQL/research routing unchanged.
+_GREETING_PATTERNS = (
+    "hi", "hii", "hiya", "hello", "hey", "hey there", "yo", "sup", "howdy",
+    "good morning", "good afternoon", "good evening", "good night",
+)
+_PLEASANTRY_PATTERNS = (
+    "thanks", "thank you", "thx", "ty", "cool", "nice", "great", "awesome",
+    "ok", "okay", "cheers", "appreciate it", "got it", "sounds good",
+)
+_FAREWELL_PATTERNS = ("bye", "goodbye", "see you", "see ya", "later", "take care")
+_CAPABILITY_PHRASES = (
+    "who are you", "what are you", "what can you do", "what do you do",
+    "how do you work", "what can i ask", "what can i ask you", "what do you know",
+)
+
+
+def _is_smalltalk(question: str) -> bool:
+    normalized = question.strip().lower().rstrip("!.?, ")
+    if not normalized:
+        return True
+    if normalized in _GREETING_PATTERNS or normalized in _PLEASANTRY_PATTERNS or normalized in _FAREWELL_PATTERNS:
+        return True
+    # Capability questions ("what can you do") are short and phrase-shaped
+    # rather than exact-match-shaped ("help me out here" should still count),
+    # so this checks containment within a short message rather than an exact
+    # match -- long enough to allow natural phrasing, short enough that a
+    # real data question containing an incidental "help" word (rare, but
+    # possible: "can you help me understand the delay on route 12") doesn't
+    # get misrouted; the word-count cap is what keeps that safe.
+    if len(normalized.split()) <= 7 and any(phrase in normalized for phrase in _CAPABILITY_PHRASES):
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class RouteDecision:
-    route: str  # "sql" | "research" | "both" | "context_only"
+    route: str  # "sql" | "research" | "both" | "context_only" | "smalltalk"
     research_topic: str | None
     sql_question: str | None
 
@@ -55,6 +96,8 @@ def decide_route(signal: Signal | None, question: str | None) -> RouteDecision:
     since that's the only node that can ground an answer in live data."""
 
     if question is not None:
+        if _is_smalltalk(question):
+            return RouteDecision(route="smalltalk", research_topic=None, sql_question=None)
         return _decide_for_question(question)
 
     if signal is None:

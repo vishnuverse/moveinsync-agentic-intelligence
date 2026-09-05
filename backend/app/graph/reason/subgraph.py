@@ -24,7 +24,7 @@ from app.graph.reason import nodes
 from app.graph.reason.state import ReasonState
 from app.graph.sense.state import Signal
 
-_SPECIALIST_DESTINATIONS = ["call_sql_agent", "call_research_agent", "impact_context_builder"]
+_SPECIALIST_DESTINATIONS = ["call_sql_agent", "call_research_agent", "impact_context_builder", "smalltalk_reply"]
 
 
 def _route_after_specialist(state: ReasonState) -> list[str] | str:
@@ -35,6 +35,13 @@ def _route_after_specialist(state: ReasonState) -> list[str] | str:
         return "call_sql_agent"
     if route == "research":
         return "call_research_agent"
+    if route == "smalltalk":
+        # Plan: chat intent node -- "hi"/"thanks"/"what can you do" never
+        # reaches the SQL agent, the research agent, or an LLM call at all;
+        # smalltalk_reply is a standalone terminal node (straight to END,
+        # not through impact_context_builder/root_cause_synthesizer, which
+        # have nothing to build context around for a greeting).
+        return "smalltalk_reply"
     return "impact_context_builder"
 
 
@@ -61,6 +68,7 @@ def build_reason_subgraph() -> StateGraph:
     graph.add_node("impact_context_builder", nodes.impact_context_builder)
     graph.add_node("rule_based_decision", nodes.rule_based_decision)
     graph.add_node("root_cause_synthesizer", nodes.root_cause_synthesizer)
+    graph.add_node("smalltalk_reply", nodes.smalltalk_reply)
 
     graph.add_edge(START, "route_to_specialist")
     graph.add_conditional_edges("route_to_specialist", _route_after_specialist, _SPECIALIST_DESTINATIONS)
@@ -71,6 +79,7 @@ def build_reason_subgraph() -> StateGraph:
     )
     graph.add_edge("root_cause_synthesizer", END)
     graph.add_edge("rule_based_decision", END)
+    graph.add_edge("smalltalk_reply", END)
 
     return graph
 

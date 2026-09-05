@@ -92,40 +92,52 @@ def _since_date(since: datetime) -> date:
 
 
 def _resolve_since(conn: Connection, org_id: str, since: datetime | None) -> datetime:
-    """BUGFIX (found live: every detector returned nothing against the real
+    """BUGFIX #1 (found live: every detector returned nothing against the real
     dataset by default): this used to anchor the default lookback window on
     wall-clock `_utcnow()`, which is fine for the synthetic seed (generated
     relative to "now" at seed time) but silently breaks on the real dataset,
     which is fixed to May-Jul 2026 -- any run after that (e.g. today) found
     zero rows in a "last 7 days from wall-clock now" window, so every
     detector except flag_data_quality (which isn't time-windowed the same
-    way) produced nothing. Same fix `chart_data.py` already applies to its
-    aggregation queries ("anchored to the data's own most-recent date, not
-    wall-clock now") -- extended here to the sense layer too, via one MAX()
-    query against the trip entity (the central fact table every other
-    entity's real timestamps cluster around). Falls back to wall-clock if
-    trip is empty (e.g. a genuinely fresh/synthetic DB with no data yet) --
-    or if `mis.trip` doesn't exist at all yet: unlike the synthetic schema,
-    `mis.*` is only created by db/real_data/ingest.py, which itself only
-    runs when the real dataset's CSVs are present (see docker-compose.yml's
-    `seed` comment) -- so a fresh clone without that (gitignored, host-only)
-    dataset never gets `mis.trip` created, and every detector would
-    otherwise raise UndefinedTable on every scheduler tick instead of just
-    quietly returning no signals like an empty table does."""
+    way) produced nothing.
+
+    BUGFIX #2 (found live, 2026-09-05): the fix above anchored on the
+    literal MAX(actual_departure), which has the same failure mode
+    chart_data.py's `_max_date` had before its own dense-anchor fix -- once
+    the live-ops demo replay started inserting a handful of trip rows dated
+    "today" (observed: 3 rows, 36 days after the real historical bulk for
+    org vanta-Aus ends), MAX(actual_departure) jumped to that sparse day,
+    and every detector's default 7-day lookback landed almost entirely in
+    the empty gap before it. Verified live: this is why escort-compliance
+    alerts dominated every persona's notification feed for hours while
+    delay/cost/incident/variability/billing alerts almost never fired --
+    detect_escort_compliance_signal scans its own unbounded historical
+    window (immune to this bug) while every other detector here depends on
+    `_resolve_since`. Anchoring on `dense_anchor_date` (most recent date
+    with real volume, same helper chart_data.py/aggregated_insights.py use)
+    instead of the literal max fixes every detector in this file at once.
+
+    Falls back to wall-clock if trip is empty (e.g. a genuinely fresh/
+    synthetic DB with no data yet) -- or if `mis.trip` doesn't exist at all
+    yet: unlike the synthetic schema, `mis.*` is only created by
+    db/real_data/ingest.py, which itself only runs when the real dataset's
+    CSVs are present (see docker-compose.yml's `seed` comment) -- so a fresh
+    clone without that (gitignored, host-only) dataset never gets `mis.trip`
+    created, and every detector would otherwise raise UndefinedTable on
+    every scheduler tick instead of just quietly returning no signals like
+    an empty table does."""
     if since is not None:
         return since
+    from app.services.date_window import dense_anchor_date
+
     contract = get_contract()
     trip = contract.entity("trip")
     if conn.execute(text("SELECT to_regclass(:t)"), {"t": trip.table}).scalar() is None:
         return _utcnow() - DEFAULT_LOOKBACK
-    anchor = conn.execute(
-        text(f"SELECT MAX({trip.column('actual_departure')}) FROM {trip.table} WHERE {trip.column('org_id')} = :org_id"),
-        {"org_id": org_id},
-    ).scalar()
-    if anchor is None:
+    anchor_date = dense_anchor_date(conn, trip.table, trip.column("trip_date"), org_id, trip.column("org_id"))
+    if anchor_date is None:
         return _utcnow() - DEFAULT_LOOKBACK
-    if anchor.tzinfo is None:
-        anchor = anchor.replace(tzinfo=timezone.utc)
+    anchor = datetime.combine(anchor_date, datetime.max.time(), tzinfo=timezone.utc)
     return anchor - DEFAULT_LOOKBACK
 
 

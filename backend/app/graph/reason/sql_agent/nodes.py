@@ -146,6 +146,8 @@ class SQLAgentNodes:
             org_id=self.org_id,
             schema_context=state["schema_context"],
             scope_context=prompts.build_scope_context(),
+            join_hints=prompts.JOIN_HINTS,
+            worked_examples=prompts.WORKED_EXAMPLES.format(org_id=self.org_id),
         )
         messages = [SystemMessage(content=system)]
 
