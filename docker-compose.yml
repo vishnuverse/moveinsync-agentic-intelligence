@@ -15,6 +15,14 @@
 # `frontend`, which reverse-proxies /api (and the /api/ws websocket) to
 # `backend` itself (see frontend/Caddyfile) -- one tunnel target reaches the
 # whole app, no second hostname needed.
+#
+# The `cloudflared` service below is opt-in (`profiles: [tunnel]`) and not
+# started by plain `docker compose up` -- it needs a credentials JSON only
+# whoever owns the "inferencezero" tunnel has. Everyone else (a judge, a
+# teammate on a fresh clone) gets the full app at http://localhost:5173
+# with no Cloudflare account needed. See README.md's "Optional: public URL"
+# section to set up your own tunnel and opt in with
+# `docker compose --profile tunnel up`.
 
 services:
   postgres:
@@ -144,8 +152,18 @@ services:
   # Outbound-only: no ports published, nothing to open in a firewall.
   # Ingress routing (hostname -> frontend:4173) lives in
   # cloudflared/config.yml, not on this command line.
+  #
+  # `profiles: [tunnel]` -- opt-in, not part of a plain `docker compose up`.
+  # Its credentials JSON is gitignored/host-only (see .gitignore and this
+  # file's header comment), so anyone without it -- a judge or teammate
+  # cloning the repo fresh -- would otherwise watch this one container
+  # restart-loop forever ("Tunnel credentials file ... doesn't exist")
+  # while everything else comes up fine. Start it explicitly with
+  # `docker compose --profile tunnel up` once cloudflared/<tunnel-id>.json
+  # is in place -- see README.md's "Optional: public URL" section.
   cloudflared:
     image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
     # --protocol http2, not the default QUIC/UDP: verified live that QUIC
     # repeatedly fails ("context canceled" / "control stream encountered a
     # failure") from inside this container's Docker network -- a known
