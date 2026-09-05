@@ -305,6 +305,18 @@ To set up and run your own:
    ```bash
    docker compose --profile tunnel up --build
    ```
+   If you run this often, you don't have to type `--profile tunnel` every
+   time: Compose also reads the
+   [`COMPOSE_PROFILES`](https://docs.docker.com/compose/environment-variables/envvars/#compose_profiles)
+   environment variable, including from a `.env` file in the repo root
+   (already gitignored — see `.gitignore` — so it stays local to your
+   machine). Create one with:
+   ```bash
+   echo "COMPOSE_PROFILES=tunnel" >> .env
+   ```
+   and from then on, plain `docker compose up --build` includes
+   `cloudflared` on this machine, same as before this became opt-in —
+   without changing what anyone else's `docker compose up` does.
 
 ### Development Workflow
 
