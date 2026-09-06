@@ -1,4 +1,4 @@
-"""Streaming replay demo tool (docs/superpowers/specs/2026-09-05-demo-prep-design.md).
+"""Streaming replay demo tool for the real-data dataset.
 
 Selects real historical trip clusters (a trip row plus its linked cost/
 incident/emission rows, joined on trip_id) known to trigger a specific

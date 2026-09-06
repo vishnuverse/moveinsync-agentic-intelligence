@@ -322,12 +322,27 @@ CREATE INDEX idx_mis_incident_status ON mis.incident(status);
 -- folded into the same guard since dividing real cost by e.g. 0.0003km
 -- produces a multi-million-INR/km "rate" that isn't a meaningful number,
 -- just an artifact of the raw distance value being wrong) -- set NULL and
--- flagged rather than producing inf or an absurd outlier. A second,
--- UNDOCUMENTED quirk found during ingestion: 189 bill_data rows carry a
--- NEGATIVE trip_cost (some under a literal trip_id="OverHead" -- a billing
+-- flagged rather than producing inf or an absurd outlier. When billing
+-- distance is unusable this way, cost_per_km_inr falls back to the same
+-- trip_id's mis.trip.traveled_km/planned_km (real telemetry from the
+-- ride_data_trip file) rather than giving up -- vanta-Aus and vanta-Sea's
+-- vendors bill almost entirely by distance *slab* (total_trip_km is a
+-- literal 0 for ~97-99.97% of their bill_data rows; the other three orgs are
+-- 99%+ populated), and without this fallback their vendors/cost rows were
+-- left with no cost_per_km_inr at all even though the trip's real distance
+-- is known. distance_km itself is NOT affected by this fallback -- it stays
+-- the raw billed total_trip_km verbatim (chart_data.billing_discrepancy
+-- deliberately diffs distance_km against traveled_km, so it must keep
+-- meaning "what was billed", not "what was driven"). A second, UNDOCUMENTED
+-- quirk found during ingestion: 189 bill_data rows carry a NEGATIVE
+-- trip_cost (some under a literal trip_id="OverHead" -- a billing
 -- correction/adjustment line, not a per-trip fare); these are flagged and
 -- excluded from this table entirely, not inserted with a clipped value,
--- since a billing adjustment has no valid per-trip substitute.
+-- since a billing adjustment has no valid per-trip substitute. A third:
+-- a handful of rows per org (up to 585 in vanta-Sea) have a valid
+-- total_trip_km but a $0 trip_cost -- the row is kept (it's not a billing
+-- adjustment), but cost_per_km_inr is guarded to NULL for the same
+-- divide-by-a-meaningless-number reason as the distance guard.
 -- ---------------------------------------------------------------------------
 CREATE TABLE mis.cost (
     id               BIGSERIAL PRIMARY KEY,
@@ -339,7 +354,7 @@ CREATE TABLE mis.cost (
     distance_km      NUMERIC(10, 3),                        -- total_trip_km
     passenger_count  INTEGER,                                -- backfilled from mis.trip when resolved
     total_cost_inr   NUMERIC(12, 2) NOT NULL,                 -- cleaned trip_cost
-    cost_per_km_inr  NUMERIC(12, 4),                           -- NULL when distance_km <= 0.1km (divide-by-zero guard, flagged -- see mis.cost comment)
+    cost_per_km_inr  NUMERIC(12, 4),                           -- amount / best usable distance (billed, else trip's traveled/planned km); NULL when neither is usable or amount is 0 (flagged -- see mis.cost comment)
     cost_category    TEXT NOT NULL DEFAULT 'trip_fare',
     contract         TEXT,
     slab_name        TEXT,

@@ -19,8 +19,8 @@ backend/.env
 # Cloudflare Tunnel credentials -- the tunnel's private key, never commit
 cloudflared/*.json
 
-# Claude Code worktree scratch space
-.claude/worktrees/
+# Claude Code local scratch space (worktrees, launch config, local settings)
+.claude/
 
 # IDE
 .vscode/
